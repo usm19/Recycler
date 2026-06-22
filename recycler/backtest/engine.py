@@ -284,7 +284,8 @@ class Backtester:
             self._close_remaining(tr, t, tgt, "target")
             return True, worst_float
 
-        if tr.trail_atr_mult is not None and tr.be_done and not np.isnan(atr):
+        # ATR trailing (independent of breakeven; only ever tightens)
+        if tr.trail_atr_mult is not None and not np.isnan(atr):
             if d > 0:
                 tr.stop = max(tr.stop, hi - tr.trail_atr_mult * atr)
             else:

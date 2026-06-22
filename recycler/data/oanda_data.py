@@ -131,7 +131,10 @@ def load_candles(
         df = pd.read_csv(cache)
         df["time"] = pd.to_datetime(df["time"], utc=True)
         df = df.set_index("time").sort_index()
-        if not df.empty and df.index.min() <= start_ts and df.index.max() >= end_ts - pd.Timedelta(days=4):
+        # Coverage: cached data may legitimately begin a few days after the
+        # requested start (market closed / first available bar), so allow slack.
+        if (not df.empty and df.index.min() <= start_ts + pd.Timedelta(days=5)
+                and df.index.max() >= end_ts - pd.Timedelta(days=4)):
             return df.loc[(df.index >= start_ts) & (df.index <= end_ts)]
 
     df = get_candles(instrument, granularity, start=start_ts, end=end_ts, price=price)

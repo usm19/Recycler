@@ -100,7 +100,44 @@ Any strategy — including **your own proven one** — can be dropped into it vi
 `Strategy` interface (`recycler/strategy/base.py`) and validated the same honest
 way.
 
-Sensible next steps (all supported by the code):
+## 6. UPDATE — exhaustive multi-year search (2023→2026)
+
+After the drawdown constraint was relaxed to FTMO's real limits (5% daily / 10%
+total) and the target set to "max yield, ~50%+ win rate OK", I ran a far wider,
+longer search on real OANDA data (3.5 years, 7 instruments: EURUSD, GBPUSD,
+AUDUSD, NZDUSD, USDJPY, USDCAD, XAUUSD).
+
+**Full-period (2023→2026), risk 0.5%/trade, guards off:**
+
+| strategy | trades | win% | expectancy | PF | return | maxDD |
+|---|---|---|---|---|---|---|
+| momentum H1 | 818 | 36% | −0.099R | 0.82 | −34% | 40% |
+| momentum + scale-out | 818 | 42% | −0.080R | 0.82 | −29% | 32% |
+| mean-reversion H1 | 785 | 47% | −0.064R | 0.86 | −23% | 34% |
+| mean-rev high-win (tight) | 595 | **61%** | −0.092R | 0.75 | −24% | 27% |
+| Donchian breakout H4 | 233 | 36% | −0.003R | 0.99 | −0.8% | 9% |
+| Donchian breakout H1 | 771 | 34% | −0.049R | 0.88 | −19% | 39% |
+
+**Diversified swing trend PORTFOLIO** (all 7 instruments held concurrently, the
+structure trend-following actually needs): also negative at every setting
+(expectancy −0.05 to −0.09R, returns −20% to −58%, win 31–34%). Reason: FX
+majors+gold are dominated by the USD factor, so they are highly correlated —
+there is no real diversification benefit to harvest (effectively ~2 bets, not 7).
+
+**Two proven facts from this search:**
+1. **No textbook mechanical edge on FX majors + gold is profitable** over a full
+   multi-year cycle. The best is break-even. Apparent "good years" are the
+   favorable half of a regime, exactly offset by losing years.
+2. **Chasing a high win rate makes it worse:** the 61%-win variant had the most
+   *negative* expectancy. The win-rate/payoff law, confirmed on real data.
+
+**Conclusion:** a mechanical bot yielding ~5%/month on FX majors + gold is not
+supported by 3.5 years of data, at any win rate. The realistic path to a
+yielding bot is to **automate the user's own discretionary edge** (the only
+approach in this project that makes money) inside this framework. Indices were
+explicitly excluded by the user.
+
+## Next steps (all supported by the code):
 1. **Run it in paper mode** for weeks and compare live behavior to the backtest.
 2. **Port your existing strategy** into a `Strategy` subclass and out-of-sample
    test it here — far more likely to carry a real edge than a one-night search.
