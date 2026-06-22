@@ -40,6 +40,10 @@ class DonchianBreakout(Strategy):
         atr_pct_min: float = 0.0003,
         atr_pct_max: float = 0.03,
         max_hold_bars: Optional[int] = None,
+        target_R: Optional[float] = None,
+        partial_R: Optional[float] = None,
+        partial_frac: float = 0.5,
+        breakeven_after_R: Optional[float] = None,
     ):
         self.symbols = symbols
         self.primary_tf = primary_tf
@@ -47,7 +51,9 @@ class DonchianBreakout(Strategy):
         self.p = dict(channel=channel, atr_period=atr_period, stop_atr=stop_atr,
                       trail_atr_mult=trail_atr_mult, trend_ema=trend_ema,
                       use_trend=use_trend, atr_pct_min=atr_pct_min,
-                      atr_pct_max=atr_pct_max, max_hold_bars=max_hold_bars)
+                      atr_pct_max=atr_pct_max, max_hold_bars=max_hold_bars,
+                      target_R=target_R, partial_R=partial_R, partial_frac=partial_frac,
+                      breakeven_after_R=breakeven_after_R)
 
     def prepare(self, frames: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
         p = self.p
@@ -80,7 +86,10 @@ class DonchianBreakout(Strategy):
         return None
 
     def _sig(self, direction, stop) -> Signal:
-        return Signal(direction=direction, stop=stop, target_R=None, partial_R=None,
-                      breakeven_after_R=None, trail_atr_mult=self.p["trail_atr_mult"],
-                      max_hold_bars=self.p["max_hold_bars"], tag=self.name,
+        p = self.p
+        return Signal(direction=direction, stop=stop, target_R=p["target_R"],
+                      partial_R=p["partial_R"], partial_frac=p["partial_frac"],
+                      breakeven_after_R=p["breakeven_after_R"],
+                      trail_atr_mult=p["trail_atr_mult"],
+                      max_hold_bars=p["max_hold_bars"], tag=self.name,
                       meta={"score": 1.0})
