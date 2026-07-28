@@ -18,12 +18,13 @@ export function floorToStep(value, step) {
 export function conversionRate(from, to, ctx, atPrice = null) {
   if (from === to) return { rate: 1, source: 'none' };
 
+  const fin = v => (Number.isFinite(v) && v > 0 ? v : null);
   const { symbol, entry, rates } = ctx;
-  const price = atPrice != null && atPrice > 0 ? atPrice : entry;
-  const usdjpy = symbol === 'USDJPY' && price > 0 ? price : rates?.USDJPY;
-  const usdjpySrc = symbol === 'USDJPY' && price > 0 ? 'entry' : 'rates';
-  const gbpjpy = symbol === 'GBPJPY' && price > 0 ? price : null;
-  const gbpusd = rates?.GBPUSD;
+  const price = fin(atPrice) ?? fin(entry);
+  const usdjpy = symbol === 'USDJPY' && price ? price : fin(rates?.USDJPY);
+  const usdjpySrc = symbol === 'USDJPY' && price ? 'entry' : 'rates';
+  const gbpjpy = symbol === 'GBPJPY' && price ? price : null;
+  const gbpusd = fin(rates?.GBPUSD);
 
   const pair = `${from}->${to}`;
   switch (pair) {
@@ -110,17 +111,18 @@ export function computePosition(input) {
   const out = { ok: false, error: null, warnings, symbol };
   if (!spec) { out.error = 'unknown-symbol'; return out; }
 
-  const acctCcy = account.currency;
-  const initial = account.initial;
-  const equity = account.equity;
-  const dayStart = account.dayStart ?? equity;
+  const acctCcy = account?.currency;
+  const initial = account?.initial;
+  const equity = account?.equity;
+  const dayStart = account?.dayStart ?? equity;
 
-  if (!(entry > 0)) { out.error = 'need-entry'; return out; }
-  if (!(sl > 0)) { out.error = 'need-sl'; return out; }
+  const fin = v => Number.isFinite(v) && v > 0;
+  if (!fin(entry)) { out.error = 'need-entry'; return out; }
+  if (!fin(sl)) { out.error = 'need-sl'; return out; }
   if (Math.abs(entry - sl) < Math.pow(10, -spec.priceDecimals) / 2) {
     out.error = 'sl-equals-entry'; return out;
   }
-  if (!(initial > 0) || !(equity > 0)) { out.error = 'need-account'; return out; }
+  if (!fin(initial) || !fin(equity)) { out.error = 'need-account'; return out; }
 
   const direction = sl < entry ? 'long' : 'short';
   const stopDistance = Math.abs(entry - sl);
@@ -202,7 +204,7 @@ export function computePosition(input) {
 
   // Take profit / reward
   let profitCash = null, rr = null, tpValid = null;
-  if (tp != null && tp > 0) {
+  if (tp != null && Number.isFinite(tp) && tp > 0) {
     tpValid = direction === 'long' ? tp > entry : tp < entry;
     if (!tpValid) warnings.push({ code: 'tp-wrong-side', level: 'warning' });
     const tpDistance = Math.abs(tp - entry);

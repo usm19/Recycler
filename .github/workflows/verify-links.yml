@@ -9,25 +9,24 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Probe candidate public URLs
+      - name: Purge stale cache and confirm branding on the public URL
         run: |
-          probe() {
-            echo "== $1"
-            curl -sSL -o /tmp/body -w "status=%{http_code} type=%{content_type} bytes=%{size_download}\n" --max-time 20 "$1" || echo "curl-failed"
-            head -c 100 /tmp/body | tr -d '\0'; echo; echo
-          }
-          probe "https://usm19.github.io/Recycler/"
-          probe "https://cdn.jsdelivr.net/gh/usm19/Recycler@gh-pages/index.html"
-          probe "https://cdn.statically.io/gh/usm19/Recycler/gh-pages/index.html"
-          probe "https://raw.githack.com/usm19/Recycler/gh-pages/index.html"
-          probe "https://rawcdn.githack.com/usm19/Recycler/gh-pages/index.html"
-          echo "== asset MIME checks (JS must be application/javascript for the service worker)"
-          for u in \
-            "https://cdn.jsdelivr.net/gh/usm19/Recycler@gh-pages/sw.js" \
-            "https://cdn.jsdelivr.net/gh/usm19/Recycler@gh-pages/js/app.js" \
-            "https://cdn.statically.io/gh/usm19/Recycler/gh-pages/sw.js" \
-            "https://cdn.statically.io/gh/usm19/Recycler/gh-pages/js/app.js" \
-            "https://raw.githack.com/usm19/Recycler/gh-pages/sw.js" ; do
-            echo "== $u"
-            curl -sSL -o /dev/null -w "status=%{http_code} type=%{content_type}\n" --max-time 20 "$u" || echo "curl-failed"
+          base="https://raw.githack.com/usm19/Recycler/gh-pages"
+          title() { curl -sSL --max-time 20 "$base/index.html" | grep -o "<title>[^<]*</title>" || echo "fetch failed"; }
+          echo "== before: $(title)"
+          echo "== discover purge endpoint from githack homepage"
+          curl -sSL --max-time 20 https://raw.githack.com/ | grep -io '<form[^>]*>' | head -5 || true
+          curl -sSL --max-time 20 https://raw.githack.com/ | grep -io 'purge[^"<]*' | head -10 || true
+          echo "== attempt purges"
+          for f in index.html styles.css js/app.js js/calc.js js/rules.js sw.js manifest.webmanifest; do
+            curl -sS -o /dev/null -w "PURGE $f -> %{http_code}\n" -X PURGE --max-time 20 "$base/$f" || true
           done
+          curl -sS -o /dev/null -w "POST /purge -> %{http_code}\n" --max-time 20 -X POST --data-urlencode "url=$base/index.html" "https://raw.githack.com/purge" || true
+          echo "== re-check title over ~4 minutes"
+          for i in 1 2 3 4 5 6 7 8; do
+            t=$(title)
+            echo "check $i: $t"
+            case "$t" in *Calculator*) echo "FRESH ✓"; exit 0;; esac
+            sleep 30
+          done
+          echo "still stale after 4 min (will self-heal when the CDN TTL lapses)"

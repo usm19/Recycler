@@ -43,7 +43,8 @@ function loadState() {
     if (!SYMBOLS[s.symbol]) s.symbol = base.symbol;
     for (const k of Object.keys(SYMBOLS)) {
       const inp = saved.inputs?.[k];
-      if (inp) s.inputs[k] = { entry: String(inp.entry ?? ''), sl: String(inp.sl ?? ''), tp: String(inp.tp ?? '') };
+      const cell = v => (typeof v === 'string' || typeof v === 'number') ? String(v) : '';
+      if (inp) s.inputs[k] = { entry: cell(inp.entry), sl: cell(inp.sl), tp: cell(inp.tp) };
       const pad = Number(saved.pads?.[k]);
       if (Number.isFinite(pad) && pad >= 0) s.pads[k] = pad;
     }
@@ -57,8 +58,10 @@ function loadState() {
     s.account.dayStart = num(s.account.dayStart, s.account.equity);
     delete s.account.todayPnl;
     if (s.account.currency !== 'GBP' && s.account.currency !== 'USD') s.account.currency = base.account.currency;
-    s.riskPct = Math.min(0.1, Math.max(0.0025, num(s.riskPct, base.riskPct)));
-    s.bufferPct = Math.min(0.03, Math.max(0, Number.isFinite(s.bufferPct) ? s.bufferPct : base.bufferPct));
+    // clamp to the UI's actual ranges; anything outside falls back to defaults
+    s.riskPct = Math.min(0.04, Math.max(0.0025, num(s.riskPct, base.riskPct)));
+    s.bufferPct = Number.isFinite(s.bufferPct) && s.bufferPct >= 0 && s.bufferPct <= 0.03
+      ? s.bufferPct : base.bufferPct;
     s.commissionUSDPerLot = Number.isFinite(s.commissionUSDPerLot) && s.commissionUSDPerLot >= 0
       ? s.commissionUSDPerLot : base.commissionUSDPerLot;
     for (const r of ['USDJPY', 'GBPUSD']) {
@@ -168,9 +171,9 @@ function setRisk(pct, { fromSlider = false } = {}) {
 
 const BANNERS = {
   breachedTotal: () => ['bad', '✕', `<b>Max-loss breached.</b> Equity is at or below the ${fmtPct(RULES.maxLossPct)} overall floor. Do not trade — check your dashboard.`],
-  breachedDaily: () => ['bad', '✕', `<b>Daily limit hit.</b> Equity is at or below today's ${fmtPct(RULES.dailyLossPct)} floor. No more trades today.`],
+  breachedDaily: () => ['bad', '✕', `<b>Daily limit breached.</b> Equity is at or below today's ${fmtPct(RULES.dailyLossPct)} floor — on High Stakes this terminates the account. Check your dashboard before doing anything.`],
   missingRate: m => ['warn', '↺', `<b>Need the ${m === 'GBPUSD' ? 'GBP/USD' : 'USD/JPY'} rate</b> to convert this pair. Tap ⚙ → FX rates (or refresh online).`],
-  stopTooWide: w => ['warn', '⚠', `<b>Stop too wide.</b> Even 0.01 lots would risk ${fmtMoney(w.minLotRiskCash)}${w.minLotRiskPct ? ` (${fmtPct(w.minLotRiskPct)})` : ''} — over your safe limit. Tighten the stop or accept the minimum manually.`],
+  stopTooWide: w => ['warn', '⚠', `<b>Stop too wide.</b> Even 0.01 lots would risk ${fmtMoney(w.minLotRiskCash)}${w.minLotRiskPct ? ` (${fmtPct(w.minLotRiskPct)})` : ''} — over your safe limit. Tighten the stop or skip this trade.`],
   cap: (r) => ['warn', '⛨', `<b>Risk capped at ${fmtMoney(r.allowedRiskCash)}</b> (asked ${fmtMoney(r.requestedRiskCash)}) to keep your ${fmtPct(state.bufferPct)} buffer before the ${r.capReason === 'daily' ? 'daily-loss' : 'max-loss'} floor.`],
   marginCapped: (r) => ['warn', '◍', `<b>Lots capped by margin.</b> At 1:${r.leverage} leverage your equity supports ${r.lots.toFixed(2)} lots max (margin ${fmtMoney(r.marginRequired)}). Risk is ${fmtMoney(r.actualRiskCash)} — below your target.`],
   noHeadroom: () => ['bad', '⛔', `<b>No risk room left.</b> Your remaining drawdown headroom is inside the ${fmtPct(state.bufferPct)} safety buffer. Sit out, or lower the buffer in settings if you accept less breathing space.`],
@@ -293,7 +296,9 @@ function render() {
       : 'no position';
     if (tp != null && r.profitCash != null && r.tpValid) {
       $('rewardCash').textContent = fmtMoney(r.profitCash);
-      $('rewardSub').textContent = `R:R 1 : ${r.rr.toFixed(2).replace(/0$/, '')}`;
+      // cash-based ratio so it always matches the two numbers on screen
+      const cashRR = r.actualRiskCash > 0 ? r.profitCash / r.actualRiskCash : r.rr;
+      $('rewardSub').textContent = `R:R 1 : ${cashRR.toFixed(2).replace(/\.?0+$/, '')}`;
     } else {
       $('rewardCash').textContent = '—';
       $('rewardSub').textContent = tp == null ? 'add a target' : 'target on wrong side';
@@ -384,8 +389,8 @@ function syncRateFields() {
     const mins = Math.round((Date.now() - state.rates.ts) / 60000);
     const when = mins < 2 ? 'just now' : mins < 120 ? `${mins} min ago` : `${Math.round(mins / 60)} h ago`;
     note.textContent = state.rates.source === 'manual'
-      ? `Manual rates · set ${when}. GBPJPY trades use your entry price directly — exact.`
-      : `Live reference rates · updated ${when}. GBPJPY trades use your entry price directly — exact.`;
+      ? `Manual rates · set ${when}. GBPJPY/USDJPY convert at the trade's own prices — exact.`
+      : `Live reference rates · updated ${when}. GBPJPY/USDJPY convert at the trade's own prices — exact.`;
   } else {
     note.textContent = 'No rates yet — refresh online or type them in. Rates only convert JPY/USD amounts into your account currency; small deviations barely move the lot size.';
   }
@@ -420,9 +425,15 @@ function bindSettings() {
   };
   bindNum('set-initial', v => {
     if (v != null && v > 0) {
-      const wasFresh = state.account.equity === state.account.initial;
+      const wasFresh = state.account.equity === state.account.initial
+        && state.account.dayStart === state.account.initial;
       state.account.initial = v;
-      if (wasFresh) { state.account.equity = v; $('set-equity').value = String(v); }
+      if (wasFresh) {
+        state.account.equity = v;
+        state.account.dayStart = v;
+        $('set-equity').value = String(v);
+        $('set-daystart').value = String(v);
+      }
     }
   }, () => state.account.initial);
   bindNum('set-equity', v => { if (v != null && v > 0) state.account.equity = v; }, () => state.account.equity);
