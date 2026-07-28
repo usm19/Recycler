@@ -1,96 +1,45 @@
-# Recycler
+# Nebula — The5ers High Stakes lot sizer
 
-A disciplined, FTMO-compliant, autonomous FX bot — **real strategy, honest
-numbers, no SMC/ICT, no fabricated backtests.**
+A zero-backend PWA that turns *entry / stop / target* into the exact lot size that
+fits your risk **and** always leaves breathing room before The5ers High Stakes
+Classic breach floors.
 
-👉 Read **[STRATEGY.md](STRATEGY.md)** first. It contains the feasibility math,
-the strategy, and the *honest* backtest results (including why your exact
-72%/7.5%/1.2%-DD targets are mathematically impossible as a set).
+**Symbols:** GBPJPY · XAUUSD (Gold) · USDJPY
+**Stack:** plain HTML/CSS/JS, no build step, service-worker cached → instant loads, works offline.
 
-## TL;DR
-- Strategy: **H1 momentum-continuation pullback** (H4 trend filter, ADX≥20,
-  fixed 2.5R), one trade/day, intraday, red-folder news blackout.
-- Backtest Jan 1–Jun 20 2026 (real OANDA data): **+0.069R/trade, PF 1.12,
-  +1.15% at 0.15% risk, max DD $1,899** — marginal and **regime-dependent**, not
-  a money-printer. See `backtests/REPORT.md`.
-- Runs **paper** today (OANDA only). **Live MT5/FTMO** needs a one-time terminal
-  setup (below).
+## How the size is computed
 
-## Setup
-```powershell
-# deps already installed in .venv; if recreating:
-.venv\Scripts\python.exe -m pip install pandas numpy requests oandapyV20 MetaTrader5 holidays pytz matplotlib python-dotenv
-
-# secrets live in .env (gitignored). See .env.example for the keys.
+```
+riskable   = min( yourRisk% × equity,
+                  equity − dailyFloor − buffer,
+                  equity − maxLossFloor − buffer )
+perLotLoss = stopDistance × contractSize × quote→account rate
+             + spread/slippage pad + commission
+lots       = round_DOWN( riskable / perLotLoss , 0.01 )
 ```
 
-## Run
-```powershell
-$env:PYTHONUTF8='1'
-# 1) verify all integrations
-.venv\Scripts\python.exe scripts\check_connections.py
-# 2) download history (cached under data/cache)
-.venv\Scripts\python.exe scripts\fetch_data.py
-# 3) final backtest + Monte-Carlo + equity chart -> backtests/
-.venv\Scripts\python.exe scripts\final_backtest.py
-# research tooling
-.venv\Scripts\python.exe scripts\research.py      # out-of-sample variant comparison
-.venv\Scripts\python.exe scripts\diagnose.py mr_rsi2   # MFE/MAE entry diagnostic
-.venv\Scripts\python.exe scripts\grid_h1.py       # parameter robustness grid
+- `dailyFloor` = day-start value − daily-loss allowance (The5ers daily rule)
+- `maxLossFloor` = initial balance − max-loss allowance (static)
+- `buffer` (default 1% of account) is *always* kept between a full stop-out and
+  either floor — the breathing space.
+- JPY pairs convert via USD/JPY, gold is native USD. When you trade GBPJPY or
+  USDJPY the **entry price itself** is used as the conversion rate — exact, no
+  external data needed. Reference rates for the rest are fetched free
+  (Frankfurter/ECB → open.er-api.com fallback), cached, and manually overridable.
 
-# 4) run the bot
-.venv\Scripts\python.exe -m recycler.live.bot paper          # paper (no MT5 needed)
-.venv\Scripts\python.exe -m recycler.live.bot paper --once   # single iteration
-.venv\Scripts\python.exe -m recycler.live.bot live           # live MT5 (after setup)
+All The5ers rule numbers live in [`js/rules.js`](js/rules.js) — one file to edit
+if the firm ever changes its terms.
+
+## Develop
+
+```
+python3 -m http.server 8123     # serve
+node --test tests/              # unit tests for the sizing engine
 ```
 
-## ⚠️ MT5 / FTMO one-time setup (required for LIVE)
-The connection check currently fails with IPC timeout `-10005` because the FTMO
-server isn't registered in the terminal yet. Do this once:
-1. Open `C:\Program Files\MetaTrader 5\terminal64.exe`.
-2. File → Login to Trade Account → enter the FTMO demo login/password/server
-   (so `servers.dat` learns the server). Note the exact server name.
-3. Tools → Options → Expert Advisors → **enable "Allow algorithmic trading"**.
-4. Put the exact server name in `.env` as `MT5_SERVER`, then re-run
-   `scripts\check_connections.py` — it will confirm login and tell you which
-   password is the master (trading) one and the real symbol suffix.
+## Deploy
 
-## 🔐 Security — rotate these
-You shared live secrets in chat. After this project, rotate: the **Supabase
-service key**, **OANDA token**, **Telegram bot token**, and the **FTMO password**.
-`.env` is gitignored; never commit it.
+Pushing to `main` (or a `claude/**` branch) runs `.github/workflows/deploy.yml`:
+tests → GitHub Pages. The site is 100% static, so there is never a cold start.
 
-## Architecture
-```
-recycler/
-  config.py            settings + .env loader
-  instruments.py       symbol specs, sizing (USD value-per-price, lot sizing)
-  indicators.py        EMA/RSI/ATR/ADX/Bollinger/Donchian/VWAP (vectorized)
-  util.py              timeframe math, look-ahead-safe HTF alignment, sessions
-  news.py              ForexFactory red-folder blackout (live + CSV)
-  notify.py            Telegram alerts
-  storage.py           Supabase logging (+ schema bootstrap)
-  broker_mt5.py        MT5 execution (login, symbol resolve, orders, partial close)
-  preset.py            the single deployed-strategy source of truth
-  strategy/
-    base.py            Strategy + Signal contract (shared by backtest & live)
-    momentum_pullback.py
-    mean_reversion.py  (RSI2 — researched, not deployed)
-  backtest/
-    engine.py          event-driven, account-level, realistic costs, FTMO guards
-    metrics.py         honest metrics (two win-rate definitions, etc.)
-  live/
-    risk.py            RiskGuard — all discipline rules
-    bot.py             autonomous loop (paper + MT5 executors)
-scripts/               check_connections, fetch_data, final_backtest, research,
-                       diagnose, grid_h1, test_macro
-backtests/             REPORT.md, equity_curve.(csv|png), trades.csv
-```
-
-## What's proven vs. not
-- ✅ OANDA data, Telegram, Supabase, news feed, backtester, paper bot — all run.
-- ✅ Backtest results are real and reproducible (no curve-fitting).
-- ⚠️ MT5 live execution: code complete, **needs the terminal setup above**, then
-  paper-test before any real capital.
-- ⚠️ The strategy edge is marginal/regime-dependent — paper-trade and consider
-  porting your own proven strategy into the framework (see STRATEGY.md §5).
+*Not affiliated with The5ers. Always confirm limits on your dashboard.*
