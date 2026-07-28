@@ -1,8 +1,8 @@
-/* Nebula service worker — precache + stale-while-revalidate.
+/* Calculator service worker — precache + stale-while-revalidate.
    Loads are always served from cache instantly; the network refreshes the
    cache in the background so the next open picks up updates. */
 
-const VERSION = 'nebula-v3';
+const VERSION = 'nebula-v4';
 // No './' entry — hosts without directory indexes (e.g. raw.githack.com) 404 on
 // it; navigations fall back to the cached index.html instead.
 const ASSETS = [

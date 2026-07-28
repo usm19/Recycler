@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Nebula — 5ers Lot Sizer</title>
+<title>Calculator</title>
 <meta name="description" content="Position size calculator for The5ers High Stakes Classic — sized to your risk, guarded against drawdown breaches.">
 <meta name="theme-color" content="#07070f">
 <link rel="manifest" href="manifest.webmanifest">
@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Lots">
+<meta name="apple-mobile-web-app-title" content="Calculator">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -24,18 +24,23 @@
     <div class="brand">
       <svg class="brand-glyph" viewBox="0 0 48 48" fill="none" aria-hidden="true">
         <defs>
-          <linearGradient id="bg1" x1="6" y1="8" x2="42" y2="40">
+          <linearGradient id="bg1" x1="13" y1="8" x2="35" y2="41">
             <stop offset="0" stop-color="#a78bfa"/><stop offset=".5" stop-color="#e879f9"/><stop offset="1" stop-color="#67e8f9"/>
           </linearGradient>
         </defs>
-        <path d="M24 6c7 4 12 10.5 12 18S30.5 40.5 24 42c4.5-5 6.5-11 6.5-18S27.5 10 24 6Z" fill="url(#bg1)" opacity=".9"/>
-        <path d="M24 6C17 10 12 16.5 12 24s5.5 16.5 12 18c-4.5-5-6.5-11-6.5-18S20.5 10 24 6Z" fill="url(#bg1)" opacity=".55"/>
-        <circle cx="24" cy="24" r="3.4" fill="#fff"/>
-        <circle cx="36" cy="12" r="1.2" fill="#e879f9"/>
-        <circle cx="10" cy="34" r="1" fill="#67e8f9"/>
+        <rect x="12.8" y="7.5" width="22.5" height="32" rx="4" fill="url(#bg1)"/>
+        <rect x="15.8" y="10.8" width="16.5" height="6.6" rx="1.6" fill="#0c0d1e" opacity=".92"/>
+        <rect x="15.8" y="20.6" width="4.2" height="4.2" rx="1.3" fill="#fff" opacity=".95"/>
+        <rect x="21.9" y="20.6" width="4.2" height="4.2" rx="1.3" fill="#fff" opacity=".95"/>
+        <rect x="28.1" y="20.6" width="4.2" height="4.2" rx="1.3" fill="#fff" opacity=".95"/>
+        <rect x="15.8" y="26.7" width="4.2" height="4.2" rx="1.3" fill="#fff" opacity=".95"/>
+        <rect x="21.9" y="26.7" width="4.2" height="4.2" rx="1.3" fill="#fff" opacity=".95"/>
+        <rect x="28.1" y="26.7" width="4.2" height="4.2" rx="1.3" fill="#fff" opacity=".95"/>
+        <rect x="15.8" y="32.8" width="4.2" height="4.2" rx="1.3" fill="#fff" opacity=".95"/>
+        <rect x="21.9" y="32.8" width="10.4" height="4.2" rx="1.3" fill="#0c0d1e" opacity=".9"/>
       </svg>
       <div>
-        <div class="brand-name">Nebula</div>
+        <div class="brand-name">Calculator</div>
         <div class="brand-sub">The5ers High Stakes sizer</div>
       </div>
     </div>
@@ -199,7 +204,7 @@
 
   <h3>RULES APPLIED</h3>
   <div class="set-card"><ul class="rules-list" id="rulesList"></ul></div>
-  <div class="set-note">Nebula sizes every trade so a full stop-out — including spread, slippage and commission — still leaves your buffer intact before The5ers daily-loss and max-loss floors. Not affiliated with The5ers; always confirm against your dashboard.</div>
+  <div class="set-note">Every trade is sized so a full stop-out — including spread, slippage and commission — still leaves your buffer intact before The5ers daily-loss and max-loss floors. Not affiliated with The5ers; always confirm against your dashboard.</div>
 
   <button class="done-btn" id="doneBtn">Done</button>
 </div>

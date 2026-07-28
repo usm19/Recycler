@@ -1,6 +1,6 @@
 {
-  "name": "Nebula — 5ers Lot Sizer",
-  "short_name": "Lots",
+  "name": "Calculator",
+  "short_name": "Calculator",
   "description": "Position size calculator for The5ers High Stakes Classic",
   "start_url": "./",
   "scope": "./",

@@ -1,4 +1,4 @@
-# Nebula — The5ers High Stakes lot sizer
+# Calculator — The5ers High Stakes lot sizer
 
 A zero-backend PWA that turns *entry / stop / target* into the exact lot size that
 fits your risk **and** always leaves breathing room before The5ers High Stakes
