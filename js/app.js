@@ -146,6 +146,7 @@ const BANNERS = {
   missingRate: m => ['warn', '↺', `<b>Need the ${m === 'GBPUSD' ? 'GBP/USD' : 'USD/JPY'} rate</b> to convert this pair. Tap ⚙ → FX rates (or refresh online).`],
   stopTooWide: w => ['warn', '⚠', `<b>Stop too wide.</b> Even 0.01 lots would risk ${fmtMoney(w.minLotRiskCash)}${w.minLotRiskPct ? ` (${fmtPct(w.minLotRiskPct)})` : ''} — over your safe limit. Tighten the stop or accept the minimum manually.`],
   cap: (r) => ['warn', '⛨', `<b>Risk capped at ${fmtMoney(r.allowedRiskCash)}</b> (asked ${fmtMoney(r.requestedRiskCash)}) to keep your ${fmtPct(state.bufferPct)} buffer before the ${r.capReason === 'daily' ? 'daily-loss' : 'max-loss'} floor.`],
+  marginCapped: (r) => ['warn', '◍', `<b>Lots capped by margin.</b> At 1:${r.leverage} leverage your equity supports ${r.lots.toFixed(2)} lots max (margin ${fmtMoney(r.marginRequired)}). Risk is ${fmtMoney(r.actualRiskCash)} — below your target.`],
   tpWrongSide: () => ['warn', '⚠', `<b>Target is on the wrong side</b> for a ${state.lastDir || 'long'} — check entry / stop / target.`],
   highMargin: () => ['warn', '◍', `<b>Heavy margin use.</b> This position uses over half your equity as margin — a small adverse move could trigger a margin call.`],
 };
@@ -283,6 +284,7 @@ function render() {
     if (w('breached-total')) showBanner('breachedTotal');
     else if (w('breached-daily')) showBanner('breachedDaily');
     else if (w('stop-too-wide')) showBanner('stopTooWide', w('stop-too-wide'));
+    else if (r.marginCapped) showBanner('marginCapped', r);
     else if (r.capReason) showBanner('cap', r);
     else if (w('tp-wrong-side')) showBanner('tpWrongSide');
     else if (w('high-margin')) showBanner('highMargin');
@@ -430,12 +432,14 @@ function bindSettings() {
 
   /* rules list */
   $('rulesList').innerHTML = [
-    `Daily loss limit: ${fmtPct(RULES.dailyLossPct)} of starting balance, measured from the day-start value — resets at midnight server time`,
-    `Maximum loss: ${fmtPct(RULES.maxLossPct)} of initial balance (${RULES.maxLossStatic ? 'static floor' : 'trailing'})`,
-    `Profit targets: Step 1 ${fmtPct(RULES.targets.step1)} · Step 2 ${fmtPct(RULES.targets.step2)}`,
-    `Stop loss ${RULES.stopLossMandatory ? 'required on every trade' : 'recommended'}`,
-    `Leverage 1:${RULES.leverage.fx} FX · 1:${RULES.leverage.metals} metals`,
-    `Min ${RULES.minProfitableDays} profitable days (≥ ${fmtPct(RULES.profitableDayPct)}) per step`,
+    `Daily loss: ${fmtPct(RULES.dailyLossPct)} of the day-start value (the <b>higher</b> of balance or equity at 00:00 server time, GMT+3 summer). Equity-based, floating losses count — breach terminates the account`,
+    `Maximum loss: ${fmtPct(RULES.maxLossPct)} of initial balance — static equity floor, never trails`,
+    `Targets (Classic): Step 1 ${fmtPct(RULES.targets.step1)} · Step 2 ${fmtPct(RULES.targets.step2)} · min ${RULES.minProfitableDays} profitable days (closed P&amp;L ≥ ${fmtPct(RULES.profitableDayPct)} of initial)`,
+    `Stop loss: suggested, not required — but if used it must be a visible order (no hidden/stealth SL)`,
+    `Leverage 1:${RULES.leverage.fx} FX · 1:${RULES.leverage.metals} gold (metals cut to 1:25 in Mar 2026 — margin can cap gold lots)`,
+    `News: ${RULES.newsRule}`,
+    `No lot-size or exposure caps · overnight &amp; weekend holding allowed · no consistency rule`,
+    `30 days without a trade expires the account · no HFT/tick-scalping · no cross-account hedging or third-party copy trading`,
   ].map(t => `<li><span class="dot">◆</span><span>${t}</span></li>`).join('');
 }
 

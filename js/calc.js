@@ -146,16 +146,40 @@ export function computePosition(input) {
   if (guard.breachedTotal) warnings.push({ code: 'breached-total', level: 'critical' });
   else if (guard.breachedDaily) warnings.push({ code: 'breached-daily', level: 'critical' });
 
-  // Lot size
+  // Margin per lot (needed before sizing — leverage can bind, esp. gold at 1:25)
+  const leverage = RULES.leverage[spec.assetClass];
+  let notionalPerLotAcct = null;
+  if (spec.base === 'XAU') {
+    notionalPerLotAcct = usdToAcct.rate == null ? null : entry * spec.contractSize * usdToAcct.rate;
+  } else {
+    const baseToAcct = conversionRate(spec.base, acctCcy, ctx);
+    notionalPerLotAcct = baseToAcct.rate == null ? null : spec.contractSize * baseToAcct.rate;
+  }
+  const marginPerLot = notionalPerLotAcct == null ? null : notionalPerLotAcct / leverage;
+
+  // Lot size: bounded by allowed risk, then by usable margin
   let lots = floorToStep(guard.allowedRiskCash / perLotRiskTotal, DEFAULTS.lotStep);
+  let marginCapped = false;
+  if (marginPerLot != null && marginPerLot > 0) {
+    const maxByMargin = floorToStep(equity * DEFAULTS.maxMarginUseOfEquity / marginPerLot, DEFAULTS.lotStep);
+    if (lots > maxByMargin) {
+      lots = Math.max(0, maxByMargin);
+      marginCapped = true;
+      warnings.push({ code: 'margin-capped', level: 'warning' });
+    }
+  } else {
+    warnings.push({ code: 'margin-unknown', level: 'info' });
+  }
   const minLotRiskCash = DEFAULTS.minLot * perLotRiskTotal;
   if (lots < DEFAULTS.minLot) {
     lots = 0;
-    warnings.push({
-      code: 'stop-too-wide', level: 'serious',
-      minLotRiskCash,
-      minLotRiskPct: equity > 0 ? minLotRiskCash / equity : null,
-    });
+    if (!marginCapped) {
+      warnings.push({
+        code: 'stop-too-wide', level: 'serious',
+        minLotRiskCash,
+        minLotRiskPct: equity > 0 ? minLotRiskCash / equity : null,
+      });
+    }
   }
 
   const actualRiskCash = lots * perLotRiskTotal;
@@ -173,24 +197,14 @@ export function computePosition(input) {
     rr = tpDistance / stopDistance;
   }
 
-  // Margin
-  const leverage = RULES.leverage[spec.assetClass];
-  let notionalPerLotAcct = null;
-  if (spec.base === 'XAU') {
-    notionalPerLotAcct = usdToAcct.rate == null ? null : entry * spec.contractSize * usdToAcct.rate;
-  } else {
-    const baseToAcct = conversionRate(spec.base, acctCcy, ctx);
-    notionalPerLotAcct = baseToAcct.rate == null ? null : spec.contractSize * baseToAcct.rate;
-  }
+  // Margin totals for the sized position
   let marginRequired = null, marginPctOfEquity = null;
-  if (notionalPerLotAcct != null) {
-    marginRequired = (notionalPerLotAcct * lots) / leverage;
+  if (marginPerLot != null) {
+    marginRequired = marginPerLot * lots;
     marginPctOfEquity = equity > 0 ? marginRequired / equity : null;
-    if (marginPctOfEquity != null && marginPctOfEquity > 0.5) {
+    if (!marginCapped && marginPctOfEquity != null && marginPctOfEquity > 0.5) {
       warnings.push({ code: 'high-margin', level: 'warning' });
     }
-  } else {
-    warnings.push({ code: 'margin-unknown', level: 'info' });
   }
 
   const pipValuePerLot = spec.pipSize * spec.contractSize * quoteToAcct.rate;
@@ -206,7 +220,7 @@ export function computePosition(input) {
     capReason: guard.capReason,
     actualRiskCash, actualRiskStopOnly, actualRiskPct, postLossEquity,
     profitCash, rr, tpValid,
-    marginRequired, marginPctOfEquity, leverage,
+    marginRequired, marginPctOfEquity, marginPerLot, marginCapped, leverage,
     guard,
     conversion: { quoteToAcct, usdToAcct },
   });

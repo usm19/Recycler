@@ -55,7 +55,9 @@ test('guardrails: after −300 today, daily headroom caps the trade', () => {
 test('guardrails: deep drawdown caps by total floor', () => {
   const g = computeGuardrails({ initial: 10000, equity: 9200, todayPnl: 0, riskPct: 0.04, bufferPct: 0.01 });
   closeTo(g.headroomTotal, 100);           // 9200 − 9000 − 100
-  closeTo(g.headroomDaily, 9200 - (9200 - 500) - 100); // daily hangs off day-start = 9200
+  // daily re-bases off day-start: allowance = 5% × 9200 = 460 → floor 8740
+  closeTo(g.dailyFloor, 8740);
+  closeTo(g.headroomDaily, 9200 - 8740 - 100);
   closeTo(g.allowedRiskCash, 100);
   assert.equal(g.capReason, 'total');
 });
@@ -115,7 +117,24 @@ test('XAUUSD short on fresh $10k, 2%', () => {
   assert.equal(r.lots, 0.18);
   closeTo(r.actualRiskCash, 0.18 * total, 1e-9);
   closeTo(r.rr, 2);
-  closeTo(r.marginRequired, 3350 * 100 * 0.18 / 100, 1e-6);
+  // gold margin at 1:25
+  closeTo(r.marginRequired, 3350 * 100 * 0.18 / 25, 1e-6);
+  assert.equal(r.marginCapped, false);
+});
+
+test('XAUUSD tight stop: 1:25 leverage caps the lots by margin', () => {
+  const r = computePosition({
+    symbol: 'XAUUSD', entry: 3350, sl: 3347,       // $3 stop
+    riskPct: 0.03, account: freshUSD, rates: {},
+  });
+  assert.equal(r.ok, true);
+  // risk alone would allow floor(300 / (3*100 + 50 + 4)) = 0.84 lots,
+  // but margin/lot = 3350*100/25 = 13,400 → 90% of equity allows only 0.67
+  assert.equal(r.marginCapped, true);
+  assert.equal(r.lots, floorToStep(10000 * 0.9 / 13400, 0.01));
+  assert.equal(r.lots, 0.67);
+  assert.ok(r.warnings.some(w => w.code === 'margin-capped'));
+  assert.ok(r.marginRequired <= 10000 * 0.9 + 1e-9);
 });
 
 test('USDJPY short on £10k: JPY converted via GBPUSD × entry', () => {
