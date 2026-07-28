@@ -9,25 +9,23 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Probe candidate public URLs
+      - name: Probe the public URL and confirm current branding
         run: |
-          probe() {
-            echo "== $1"
-            curl -sSL -o /tmp/body -w "status=%{http_code} type=%{content_type} bytes=%{size_download}\n" --max-time 20 "$1" || echo "curl-failed"
-            head -c 100 /tmp/body | tr -d '\0'; echo; echo
-          }
-          probe "https://usm19.github.io/Recycler/"
-          probe "https://cdn.jsdelivr.net/gh/usm19/Recycler@gh-pages/index.html"
-          probe "https://cdn.statically.io/gh/usm19/Recycler/gh-pages/index.html"
-          probe "https://raw.githack.com/usm19/Recycler/gh-pages/index.html"
-          probe "https://rawcdn.githack.com/usm19/Recycler/gh-pages/index.html"
-          echo "== asset MIME checks (JS must be application/javascript for the service worker)"
-          for u in \
-            "https://cdn.jsdelivr.net/gh/usm19/Recycler@gh-pages/sw.js" \
-            "https://cdn.jsdelivr.net/gh/usm19/Recycler@gh-pages/js/app.js" \
-            "https://cdn.statically.io/gh/usm19/Recycler/gh-pages/sw.js" \
-            "https://cdn.statically.io/gh/usm19/Recycler/gh-pages/js/app.js" \
-            "https://raw.githack.com/usm19/Recycler/gh-pages/sw.js" ; do
-            echo "== $u"
-            curl -sSL -o /dev/null -w "status=%{http_code} type=%{content_type}\n" --max-time 20 "$u" || echo "curl-failed"
+          base="https://raw.githack.com/usm19/Recycler/gh-pages"
+          echo "== page"
+          curl -sSL -o /tmp/index.html -w "status=%{http_code} type=%{content_type} bytes=%{size_download}\n" --max-time 20 "$base/index.html"
+          grep -o "<title>[^<]*</title>" /tmp/index.html || echo "no title found"
+          grep -o 'class="brand-name">[^<]*' /tmp/index.html || echo "no brand name found"
+          echo "== manifest"
+          curl -sSL --max-time 20 "$base/manifest.webmanifest" | grep -E '"(name|short_name)"' || echo "manifest fetch failed"
+          echo "== service worker"
+          curl -sSL --max-time 20 "$base/sw.js" | head -2
+          curl -sSL --max-time 20 "$base/sw.js" | grep "VERSION =" || true
+          echo "== icons"
+          for f in icons/apple-touch-icon.png icons/icon-192.png icons/icon-512.png icons/icon-maskable-512.png; do
+            curl -sSL -o /dev/null -w "$f status=%{http_code} type=%{content_type} bytes=%{size_download}\n" --max-time 20 "$base/$f"
+          done
+          echo "== styles + app js reachable"
+          for f in styles.css js/app.js js/calc.js js/rules.js; do
+            curl -sSL -o /dev/null -w "$f status=%{http_code} type=%{content_type} bytes=%{size_download}\n" --max-time 20 "$base/$f"
           done
