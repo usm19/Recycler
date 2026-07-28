@@ -8,17 +8,21 @@ export function floorToStep(value, step) {
 }
 
 /**
- * Convert an amount between currencies using the trade's own entry price where it
- * IS the needed rate (exact), falling back to externally supplied rates.
+ * Convert an amount between currencies using the trade's own price where it IS
+ * the needed rate (exact), falling back to externally supplied rates.
  * ctx: { symbol, entry, rates: { USDJPY, GBPUSD } }
+ * atPrice: which price of ctx.symbol to convert at — losses convert at the stop
+ * price and profits at the target price (the rate that actually applies when
+ * the position closes there); defaults to entry.
  */
-export function conversionRate(from, to, ctx) {
+export function conversionRate(from, to, ctx, atPrice = null) {
   if (from === to) return { rate: 1, source: 'none' };
 
   const { symbol, entry, rates } = ctx;
-  const usdjpy = symbol === 'USDJPY' && entry > 0 ? entry : rates?.USDJPY;
-  const usdjpySrc = symbol === 'USDJPY' && entry > 0 ? 'entry' : 'rates';
-  const gbpjpy = symbol === 'GBPJPY' && entry > 0 ? entry : null;
+  const price = atPrice != null && atPrice > 0 ? atPrice : entry;
+  const usdjpy = symbol === 'USDJPY' && price > 0 ? price : rates?.USDJPY;
+  const usdjpySrc = symbol === 'USDJPY' && price > 0 ? 'entry' : 'rates';
+  const gbpjpy = symbol === 'GBPJPY' && price > 0 ? price : null;
   const gbpusd = rates?.GBPUSD;
 
   const pair = `${from}->${to}`;
@@ -120,8 +124,11 @@ export function computePosition(input) {
   const stopPips = stopDistance / spec.pipSize;
 
   const ctx = { symbol, entry, rates };
-  const quoteToAcct = conversionRate(spec.quote, acctCcy, ctx);
+  // Losses realize at the stop price, so convert the risk leg at the stop —
+  // exact for the entry-derived crosses, and correct in both directions.
+  const quoteToAcct = conversionRate(spec.quote, acctCcy, ctx, sl);
   if (quoteToAcct.rate == null) { out.error = 'missing-rate'; out.missingRate = quoteToAcct.missing; return out; }
+  const quoteToAcctNow = conversionRate(spec.quote, acctCcy, ctx);
   const usdToAcct = conversionRate('USD', acctCcy, ctx);
 
   // Per-lot cash figures (account currency)
@@ -173,7 +180,10 @@ export function computePosition(input) {
   const minLotRiskCash = DEFAULTS.minLot * perLotRiskTotal;
   if (lots < DEFAULTS.minLot) {
     lots = 0;
-    if (!marginCapped) {
+    if (guard.allowedRiskCash <= 0 && !guard.breachedDaily && !guard.breachedTotal) {
+      // Headroom exhausted (inside the buffer zone) — not the stop's fault.
+      warnings.push({ code: 'no-headroom', level: 'serious' });
+    } else if (!marginCapped) {
       warnings.push({
         code: 'stop-too-wide', level: 'serious',
         minLotRiskCash,
@@ -193,7 +203,10 @@ export function computePosition(input) {
     tpValid = direction === 'long' ? tp > entry : tp < entry;
     if (!tpValid) warnings.push({ code: 'tp-wrong-side', level: 'warning' });
     const tpDistance = Math.abs(tp - entry);
-    profitCash = tpDistance * spec.contractSize * quoteToAcct.rate * lots - perLotCommission * lots;
+    // Profits realize at the target price
+    const quoteToAcctTp = conversionRate(spec.quote, acctCcy, ctx, tp);
+    const tpRate = quoteToAcctTp.rate ?? quoteToAcct.rate;
+    profitCash = tpDistance * spec.contractSize * tpRate * lots - perLotCommission * lots;
     rr = tpDistance / stopDistance;
   }
 
@@ -207,7 +220,7 @@ export function computePosition(input) {
     }
   }
 
-  const pipValuePerLot = spec.pipSize * spec.contractSize * quoteToAcct.rate;
+  const pipValuePerLot = spec.pipSize * spec.contractSize * quoteToAcctNow.rate;
 
   Object.assign(out, {
     ok: true,

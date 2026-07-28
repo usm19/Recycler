@@ -26,19 +26,40 @@ const defaultState = () => ({
 });
 
 function loadState() {
+  const base = defaultState();
   try {
     const raw = localStorage.getItem(STORE_KEY);
-    if (!raw) return defaultState();
+    if (!raw) return base;
     const saved = JSON.parse(raw);
-    const base = defaultState();
-    return {
+    const s = {
       ...base, ...saved,
-      inputs: { ...base.inputs, ...(saved.inputs || {}) },
+      inputs: { ...base.inputs },
       account: { ...base.account, ...(saved.account || {}) },
-      pads: { ...base.pads, ...(saved.pads || {}) },
+      pads: { ...base.pads },
       rates: { ...base.rates, ...(saved.rates || {}) },
     };
-  } catch { return defaultState(); }
+    // sanitize — corrupt/old storage must never break boot or the math
+    if (!SYMBOLS[s.symbol]) s.symbol = base.symbol;
+    for (const k of Object.keys(SYMBOLS)) {
+      const inp = saved.inputs?.[k];
+      if (inp) s.inputs[k] = { entry: String(inp.entry ?? ''), sl: String(inp.sl ?? ''), tp: String(inp.tp ?? '') };
+      const pad = Number(saved.pads?.[k]);
+      if (Number.isFinite(pad) && pad >= 0) s.pads[k] = pad;
+    }
+    const num = (v, fb, min = 0) => (Number.isFinite(v) && v > min ? v : fb);
+    s.account.initial = num(s.account.initial, base.account.initial);
+    s.account.equity = num(s.account.equity, s.account.initial);
+    s.account.todayPnl = Number.isFinite(s.account.todayPnl) ? s.account.todayPnl : 0;
+    if (s.account.currency !== 'GBP' && s.account.currency !== 'USD') s.account.currency = base.account.currency;
+    s.riskPct = Math.min(0.1, Math.max(0.0025, num(s.riskPct, base.riskPct)));
+    s.bufferPct = Math.min(0.03, Math.max(0, Number.isFinite(s.bufferPct) ? s.bufferPct : base.bufferPct));
+    s.commissionUSDPerLot = Number.isFinite(s.commissionUSDPerLot) && s.commissionUSDPerLot >= 0
+      ? s.commissionUSDPerLot : base.commissionUSDPerLot;
+    for (const r of ['USDJPY', 'GBPUSD']) {
+      if (!(Number.isFinite(s.rates[r]) && s.rates[r] > 0)) s.rates[r] = null;
+    }
+    return s;
+  } catch { return base; }
 }
 
 const state = loadState();
@@ -56,9 +77,8 @@ const $ = id => document.getElementById(id);
 
 function parseNum(str) {
   if (typeof str !== 'string') return null;
-  let s = str.trim().replace(/\s/g, '').replace(/−/g, '-');
-  if (s.includes(',') && s.includes('.')) s = s.replace(/,/g, '');
-  else s = s.replace(/,/g, '.');
+  // commas are thousands separators ("10,000"), never decimal points
+  const s = str.trim().replace(/\s/g, '').replace(/−/g, '-').replace(/,/g, '');
   const v = parseFloat(s);
   return Number.isFinite(v) ? v : null;
 }
@@ -147,6 +167,7 @@ const BANNERS = {
   stopTooWide: w => ['warn', '⚠', `<b>Stop too wide.</b> Even 0.01 lots would risk ${fmtMoney(w.minLotRiskCash)}${w.minLotRiskPct ? ` (${fmtPct(w.minLotRiskPct)})` : ''} — over your safe limit. Tighten the stop or accept the minimum manually.`],
   cap: (r) => ['warn', '⛨', `<b>Risk capped at ${fmtMoney(r.allowedRiskCash)}</b> (asked ${fmtMoney(r.requestedRiskCash)}) to keep your ${fmtPct(state.bufferPct)} buffer before the ${r.capReason === 'daily' ? 'daily-loss' : 'max-loss'} floor.`],
   marginCapped: (r) => ['warn', '◍', `<b>Lots capped by margin.</b> At 1:${r.leverage} leverage your equity supports ${r.lots.toFixed(2)} lots max (margin ${fmtMoney(r.marginRequired)}). Risk is ${fmtMoney(r.actualRiskCash)} — below your target.`],
+  noHeadroom: () => ['bad', '⛔', `<b>No risk room left.</b> Your remaining drawdown headroom is inside the ${fmtPct(state.bufferPct)} safety buffer. Sit out, or lower the buffer in settings if you accept less breathing space.`],
   tpWrongSide: () => ['warn', '⚠', `<b>Target is on the wrong side</b> for a ${state.lastDir || 'long'} — check entry / stop / target.`],
   highMargin: () => ['warn', '◍', `<b>Heavy margin use.</b> This position uses over half your equity as margin — a small adverse move could trigger a margin call.`],
 };
@@ -247,6 +268,7 @@ function render() {
     else { setDim('Check your numbers'); showBanner(null); }
   } else {
     const r = result;
+    const w = code => r.warnings.find(x => x.code === code);
     const prevTarget = lotsEl._target;
     lotsEl._target = r.lots;
     lotsEl.className = 'lots-value' + (r.lots === 0 ? ' zero' : '');
@@ -261,7 +283,7 @@ function render() {
 
     $('riskCash').textContent = fmtMoney(r.actualRiskCash);
     $('riskSub').textContent = r.lots > 0
-      ? `${fmtPct(r.actualRiskPct)} of equity · incl. costs`
+      ? `${fmtPct(r.actualRiskPct)} of equity · ${w('commission-unconverted') ? 'excl. commission' : 'incl. costs'}`
       : 'no position';
     if (tp != null && r.profitCash != null && r.tpValid) {
       $('rewardCash').textContent = fmtMoney(r.profitCash);
@@ -280,9 +302,9 @@ function render() {
     $('heroFine').innerHTML = fine.join('');
 
     /* banner priority */
-    const w = code => r.warnings.find(x => x.code === code);
     if (w('breached-total')) showBanner('breachedTotal');
     else if (w('breached-daily')) showBanner('breachedDaily');
+    else if (w('no-headroom')) showBanner('noHeadroom');
     else if (w('stop-too-wide')) showBanner('stopTooWide', w('stop-too-wide'));
     else if (r.marginCapped) showBanner('marginCapped', r);
     else if (r.capReason) showBanner('cap', r);
@@ -312,6 +334,7 @@ async function fetchRates(force = false) {
   const age = state.rates.ts ? Date.now() - state.rates.ts : Infinity;
   const have = state.rates.USDJPY && state.rates.GBPUSD;
   if (!force && have && age < 6 * 3600e3) return true;
+  if (!force && have && state.rates.source === 'manual') return true; // never clobber manual rates silently
   if (!navigator.onLine) return false;
   fetching = true;
   try {
@@ -347,8 +370,9 @@ function tryFetchRates() {
 }
 
 function syncRateFields() {
-  $('set-usdjpy').value = state.rates.USDJPY ?? '';
-  $('set-gbpusd').value = state.rates.GBPUSD ?? '';
+  const active = document.activeElement;
+  if (active !== $('set-usdjpy')) $('set-usdjpy').value = state.rates.USDJPY ?? '';
+  if (active !== $('set-gbpusd')) $('set-gbpusd').value = state.rates.GBPUSD ?? '';
   const note = $('rateNote');
   if (state.rates.ts) {
     const mins = Math.round((Date.now() - state.rates.ts) / 60000);
@@ -381,8 +405,12 @@ function bindSettings() {
   $('doneBtn').addEventListener('click', closeSheet);
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
 
-  const bindNum = (id, fn) => {
-    $(id).addEventListener('input', e => { fn(parseNum(e.target.value)); save(); render(); });
+  // Each field writes valid values into state on input, and on blur snaps its
+  // display back to the effective state so garbage can never linger on screen.
+  const bindNum = (id, fn, getter) => {
+    const el = $(id);
+    el.addEventListener('input', e => { fn(parseNum(e.target.value)); save(); render(); });
+    el.addEventListener('blur', () => { const v = getter(); el.value = v == null ? '' : String(v); });
   };
   bindNum('set-initial', v => {
     if (v != null && v > 0) {
@@ -390,13 +418,13 @@ function bindSettings() {
       state.account.initial = v;
       if (wasFresh) { state.account.equity = v; $('set-equity').value = String(v); }
     }
-  });
-  bindNum('set-equity', v => { if (v != null && v > 0) state.account.equity = v; });
-  bindNum('set-pnl', v => { state.account.todayPnl = v ?? 0; });
-  bindNum('set-pad', v => { if (v != null && v >= 0) state.pads[state.symbol] = v; });
-  bindNum('set-comm', v => { if (v != null && v >= 0) state.commissionUSDPerLot = v; });
-  bindNum('set-usdjpy', v => { if (v != null && v > 0) { state.rates.USDJPY = v; state.rates.ts = Date.now(); state.rates.source = 'manual'; } });
-  bindNum('set-gbpusd', v => { if (v != null && v > 0) { state.rates.GBPUSD = v; state.rates.ts = Date.now(); state.rates.source = 'manual'; } });
+  }, () => state.account.initial);
+  bindNum('set-equity', v => { if (v != null && v > 0) state.account.equity = v; }, () => state.account.equity);
+  bindNum('set-pnl', v => { state.account.todayPnl = v ?? 0; }, () => state.account.todayPnl);
+  bindNum('set-pad', v => { if (v != null && v >= 0) state.pads[state.symbol] = v; }, () => state.pads[state.symbol]);
+  bindNum('set-comm', v => { if (v != null && v >= 0) state.commissionUSDPerLot = v; }, () => state.commissionUSDPerLot);
+  bindNum('set-usdjpy', v => { if (v != null && v > 0) { state.rates.USDJPY = v; state.rates.ts = Date.now(); state.rates.source = 'manual'; } }, () => state.rates.USDJPY);
+  bindNum('set-gbpusd', v => { if (v != null && v > 0) { state.rates.GBPUSD = v; state.rates.ts = Date.now(); state.rates.source = 'manual'; } }, () => state.rates.GBPUSD);
 
   $('resetAccount').addEventListener('click', () => {
     state.account.equity = state.account.initial;
@@ -534,7 +562,7 @@ function startStars() {
   }
 
   resize();
-  addEventListener('resize', resize);
+  addEventListener('resize', () => { resize(); if (reduced) draw(0); });
   if (reduced) { draw(0); return; }
   raf = requestAnimationFrame(frame);
   document.addEventListener('visibilitychange', () => {

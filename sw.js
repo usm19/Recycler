@@ -2,7 +2,7 @@
    Loads are always served from cache instantly; the network refreshes the
    cache in the background so the next open picks up updates. */
 
-const VERSION = 'nebula-v1';
+const VERSION = 'nebula-v2';
 const ASSETS = [
   './',
   'index.html',
@@ -13,6 +13,7 @@ const ASSETS = [
   'manifest.webmanifest',
   'icons/icon-192.png',
   'icons/icon-512.png',
+  'icons/icon-maskable-512.png',
   'icons/apple-touch-icon.png',
 ];
 
@@ -33,13 +34,15 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET' || url.origin !== location.origin) return; // rate APIs etc: network only
   e.respondWith(
     caches.open(VERSION).then(async cache => {
-      const cached = await cache.match(e.request, { ignoreSearch: true });
+      let cached = await cache.match(e.request, { ignoreSearch: true });
+      if (!cached && e.request.mode === 'navigate') cached = await cache.match('./');
       const refresh = fetch(e.request)
         .then(res => {
           if (res && res.ok) cache.put(e.request, res.clone());
           return res;
         })
         .catch(() => null);
+      e.waitUntil(refresh); // keep the background refresh alive past the response
       return cached || refresh.then(res => res || new Response('offline', { status: 503 }));
     })
   );

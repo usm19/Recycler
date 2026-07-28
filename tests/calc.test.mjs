@@ -76,10 +76,11 @@ test('GBPJPY long on fresh £10k, 3%: full worked example', () => {
   assert.equal(r.ok, true);
   assert.equal(r.direction, 'long');
   closeTo(r.stopPips, 50);
-  const conv = 1 / 195.5;
-  const perLotRisk = 0.5 * 100000 * conv;      // 255.7545…
-  const perLotPad = 0.03 * 100000 * conv;      // 15.345…
-  const perLotComm = 4 / 1.27;                 // 3.1496…
+  // losses realize at the STOP price → convert at 195.0, not entry
+  const conv = 1 / 195.0;
+  const perLotRisk = 0.5 * 100000 * conv;
+  const perLotPad = 0.03 * 100000 * conv;
+  const perLotComm = 4 / 1.27;
   closeTo(r.perLotRisk, perLotRisk, 1e-9);
   closeTo(r.perLotPad, perLotPad, 1e-9);
   closeTo(r.perLotCommission, perLotComm, 1e-9);
@@ -90,6 +91,8 @@ test('GBPJPY long on fresh £10k, 3%: full worked example', () => {
   assert.ok(r.actualRiskCash <= 300 + 1e-9, 'never exceeds allowed risk');
   closeTo(r.rr, 2);
   assert.equal(r.tpValid, true);
+  // profits realize at the TARGET price
+  closeTo(r.profitCash, 1.0 * 100000 / 196.5 * 1.09 - (4 / 1.27) * 1.09, 1e-6);
   // margin: 100,000 GBP notional per lot on a GBP account @1:100
   closeTo(r.marginRequired, 100000 * 1.09 / 100, 1e-6);
 });
@@ -144,7 +147,7 @@ test('USDJPY short on £10k: JPY converted via GBPUSD × entry', () => {
   });
   assert.equal(r.ok, true);
   assert.equal(r.direction, 'short');
-  const conv = 1 / (1.27 * 148.5);
+  const conv = 1 / (1.27 * 149.0);   // JPY→GBP at the stop price
   closeTo(r.perLotRisk, 0.5 * 100000 * conv, 1e-9);
   closeTo(r.rr, 2);
   assert.equal(r.tpValid, true);
@@ -172,6 +175,19 @@ test('stop too wide for min lot → 0 lots + serious warning', () => {
   const w = r.warnings.find(w => w.code === 'stop-too-wide');
   assert.ok(w);
   assert.ok(w.minLotRiskCash > 0);
+});
+
+test('headroom inside the buffer → 0 lots with no-headroom (not stop-too-wide)', () => {
+  const r = computePosition({
+    symbol: 'USDJPY', entry: 148.5, sl: 148.0,
+    riskPct: 0.02,
+    account: { initial: 10000, currency: 'USD', equity: 9050, todayPnl: 0 },  // £50 above max-loss floor, buffer £100
+    rates: {},
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.lots, 0);
+  assert.ok(r.warnings.some(w => w.code === 'no-headroom'));
+  assert.ok(!r.warnings.some(w => w.code === 'stop-too-wide'));
 });
 
 test('TP on the wrong side warns but still sizes the trade', () => {
