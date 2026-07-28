@@ -2,9 +2,10 @@
    Loads are always served from cache instantly; the network refreshes the
    cache in the background so the next open picks up updates. */
 
-const VERSION = 'nebula-v2';
+const VERSION = 'nebula-v3';
+// No './' entry — hosts without directory indexes (e.g. raw.githack.com) 404 on
+// it; navigations fall back to the cached index.html instead.
 const ASSETS = [
-  './',
   'index.html',
   'styles.css',
   'js/app.js',
@@ -18,7 +19,12 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  // Cache assets individually — one missing file must not abort the install.
+  e.waitUntil(
+    caches.open(VERSION)
+      .then(c => Promise.allSettled(ASSETS.map(a => c.add(a))))
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener('activate', e => {
@@ -35,7 +41,7 @@ self.addEventListener('fetch', e => {
   e.respondWith(
     caches.open(VERSION).then(async cache => {
       let cached = await cache.match(e.request, { ignoreSearch: true });
-      if (!cached && e.request.mode === 'navigate') cached = await cache.match('./');
+      if (!cached && e.request.mode === 'navigate') cached = await cache.match('index.html');
       const refresh = fetch(e.request)
         .then(res => {
           if (res && res.ok) cache.put(e.request, res.clone());
