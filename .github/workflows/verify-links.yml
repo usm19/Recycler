@@ -9,23 +9,24 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Probe the public URL and confirm current branding
+      - name: Purge stale cache and confirm branding on the public URL
         run: |
           base="https://raw.githack.com/usm19/Recycler/gh-pages"
-          echo "== page"
-          curl -sSL -o /tmp/index.html -w "status=%{http_code} type=%{content_type} bytes=%{size_download}\n" --max-time 20 "$base/index.html"
-          grep -o "<title>[^<]*</title>" /tmp/index.html || echo "no title found"
-          grep -o 'class="brand-name">[^<]*' /tmp/index.html || echo "no brand name found"
-          echo "== manifest"
-          curl -sSL --max-time 20 "$base/manifest.webmanifest" | grep -E '"(name|short_name)"' || echo "manifest fetch failed"
-          echo "== service worker"
-          curl -sSL --max-time 20 "$base/sw.js" | head -2
-          curl -sSL --max-time 20 "$base/sw.js" | grep "VERSION =" || true
-          echo "== icons"
-          for f in icons/apple-touch-icon.png icons/icon-192.png icons/icon-512.png icons/icon-maskable-512.png; do
-            curl -sSL -o /dev/null -w "$f status=%{http_code} type=%{content_type} bytes=%{size_download}\n" --max-time 20 "$base/$f"
+          title() { curl -sSL --max-time 20 "$base/index.html" | grep -o "<title>[^<]*</title>" || echo "fetch failed"; }
+          echo "== before: $(title)"
+          echo "== discover purge endpoint from githack homepage"
+          curl -sSL --max-time 20 https://raw.githack.com/ | grep -io '<form[^>]*>' | head -5 || true
+          curl -sSL --max-time 20 https://raw.githack.com/ | grep -io 'purge[^"<]*' | head -10 || true
+          echo "== attempt purges"
+          for f in index.html styles.css js/app.js js/calc.js js/rules.js sw.js manifest.webmanifest; do
+            curl -sS -o /dev/null -w "PURGE $f -> %{http_code}\n" -X PURGE --max-time 20 "$base/$f" || true
           done
-          echo "== styles + app js reachable"
-          for f in styles.css js/app.js js/calc.js js/rules.js; do
-            curl -sSL -o /dev/null -w "$f status=%{http_code} type=%{content_type} bytes=%{size_download}\n" --max-time 20 "$base/$f"
+          curl -sS -o /dev/null -w "POST /purge -> %{http_code}\n" --max-time 20 -X POST --data-urlencode "url=$base/index.html" "https://raw.githack.com/purge" || true
+          echo "== re-check title over ~4 minutes"
+          for i in 1 2 3 4 5 6 7 8; do
+            t=$(title)
+            echo "check $i: $t"
+            case "$t" in *Calculator*) echo "FRESH ✓"; exit 0;; esac
+            sleep 30
           done
+          echo "still stale after 4 min (will self-heal when the CDN TTL lapses)"
