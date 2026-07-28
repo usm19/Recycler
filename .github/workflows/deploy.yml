@@ -1,0 +1,42 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main, master, recycler-bot, 'claude/**']
+  workflow_dispatch:
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test tests/*.test.mjs
+
+  deploy:
+    needs: test
+    # only the canonical branch may overwrite the live site
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || github.ref == 'refs/heads/claude/5ers-lot-size-calculator-605mx1' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish site to gh-pages branch
+        run: |
+          mkdir /tmp/site
+          rsync -a --exclude .git --exclude .github --exclude tests --exclude node_modules ./ /tmp/site/
+          cd /tmp/site
+          touch .nojekyll
+          git init -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Deploy ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages
