@@ -5,8 +5,8 @@ import { computePosition, computeGuardrails, conversionRate, floorToStep } from 
 const closeTo = (a, b, tol = 1e-6) =>
   assert.ok(Math.abs(a - b) <= tol, `expected ${a} ≈ ${b} (±${tol})`);
 
-const freshGBP = { initial: 10000, currency: 'GBP', equity: 10000, todayPnl: 0 };
-const freshUSD = { initial: 10000, currency: 'USD', equity: 10000, todayPnl: 0 };
+const freshGBP = { initial: 10000, currency: 'GBP', equity: 10000, dayStart: 10000 };
+const freshUSD = { initial: 10000, currency: 'USD', equity: 10000, dayStart: 10000 };
 
 test('floorToStep rounds down to lot step without float artifacts', () => {
   assert.equal(floorToStep(1.0939, 0.01), 1.09);
@@ -35,7 +35,7 @@ test('conversionRate uses trade entry as the exact cross where possible', () => 
 });
 
 test('guardrails: fresh account, 3% requested → 300 allowed, uncapped', () => {
-  const g = computeGuardrails({ initial: 10000, equity: 10000, todayPnl: 0, riskPct: 0.03, bufferPct: 0.01 });
+  const g = computeGuardrails({ initial: 10000, equity: 10000, dayStart: 10000, riskPct: 0.03, bufferPct: 0.01 });
   closeTo(g.dailyFloor, 9500);
   closeTo(g.totalFloor, 9000);
   closeTo(g.requestedRiskCash, 300);
@@ -44,16 +44,33 @@ test('guardrails: fresh account, 3% requested → 300 allowed, uncapped', () => 
 });
 
 test('guardrails: after −300 today, daily headroom caps the trade', () => {
-  const g = computeGuardrails({ initial: 10000, equity: 9700, todayPnl: -300, riskPct: 0.03, bufferPct: 0.01 });
-  closeTo(g.dayStart, 10000);
+  const g = computeGuardrails({ initial: 10000, equity: 9700, dayStart: 10000, riskPct: 0.03, bufferPct: 0.01 });
+  closeTo(g.baseline, 10000);
   closeTo(g.dailyFloor, 9500);
   closeTo(g.headroomDaily, 100);           // 9700 − 9500 − 100 buffer
   closeTo(g.allowedRiskCash, 100);
   assert.equal(g.capReason, 'daily');
 });
 
+test('guardrails: overnight floating loss — baseline is the day-start value, not equity', () => {
+  // balance £10,000 / equity £9,800 at midnight → dashboard baseline 10,000.
+  // The floor must hang off 10,000 even though equity opened at 9,800.
+  const g = computeGuardrails({ initial: 10000, equity: 9800, dayStart: 10000, riskPct: 0.04, bufferPct: 0.01 });
+  closeTo(g.dailyFloor, 9500);
+  closeTo(g.headroomDaily, 200);           // 9800 − 9500 − 100
+  closeTo(g.allowedRiskCash, 200);
+  assert.equal(g.capReason, 'daily');
+});
+
+test('guardrails: profitable day — working baseline rises to equity (conservative)', () => {
+  const g = computeGuardrails({ initial: 10000, equity: 10400, dayStart: 10000, riskPct: 0.03, bufferPct: 0.01 });
+  closeTo(g.baseline, 10400);              // never below current equity
+  closeTo(g.dailyFloor, 9880);             // 0.95 × 10400
+  closeTo(g.headroomDaily, 10400 - 9880 - 100);
+});
+
 test('guardrails: deep drawdown caps by total floor', () => {
-  const g = computeGuardrails({ initial: 10000, equity: 9200, todayPnl: 0, riskPct: 0.04, bufferPct: 0.01 });
+  const g = computeGuardrails({ initial: 10000, equity: 9200, dayStart: 9200, riskPct: 0.04, bufferPct: 0.01 });
   closeTo(g.headroomTotal, 100);           // 9200 − 9000 − 100
   // daily re-bases off day-start: allowance = 5% × 9200 = 460 → floor 8740
   closeTo(g.dailyFloor, 8740);
@@ -63,7 +80,7 @@ test('guardrails: deep drawdown caps by total floor', () => {
 });
 
 test('guardrails: breach flags fire', () => {
-  const g = computeGuardrails({ initial: 10000, equity: 8990, todayPnl: 0, riskPct: 0.02, bufferPct: 0.01 });
+  const g = computeGuardrails({ initial: 10000, equity: 8990, dayStart: 8990, riskPct: 0.02, bufferPct: 0.01 });
   assert.equal(g.breachedTotal, true);
   closeTo(g.allowedRiskCash, 0);
 });
@@ -168,7 +185,7 @@ test('missing rate surfaces as a typed error', () => {
 test('stop too wide for min lot → 0 lots + serious warning', () => {
   const r = computePosition({
     symbol: 'GBPJPY', entry: 195.5, sl: 185.5,   // 1000-pip stop
-    riskPct: 0.02, account: { ...freshGBP, equity: 400, initial: 400 }, rates: { GBPUSD: 1.27 },
+    riskPct: 0.02, account: { ...freshGBP, equity: 400, initial: 400, dayStart: 400 }, rates: { GBPUSD: 1.27 },
   });
   assert.equal(r.ok, true);
   assert.equal(r.lots, 0);
@@ -181,7 +198,7 @@ test('headroom inside the buffer → 0 lots with no-headroom (not stop-too-wide)
   const r = computePosition({
     symbol: 'USDJPY', entry: 148.5, sl: 148.0,
     riskPct: 0.02,
-    account: { initial: 10000, currency: 'USD', equity: 9050, todayPnl: 0 },  // £50 above max-loss floor, buffer £100
+    account: { initial: 10000, currency: 'USD', equity: 9050, dayStart: 9050 },  // $50 above max-loss floor, buffer $100
     rates: {},
   });
   assert.equal(r.ok, true);

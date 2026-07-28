@@ -57,13 +57,16 @@ export function conversionRate(from, to, ctx, atPrice = null) {
 /**
  * Drawdown floors and the cash risk actually allowed for the next trade.
  * All amounts in account currency.
+ *
+ * dayStart is The5ers' daily baseline: the HIGHER of balance or equity at
+ * 00:00 server time (shown on the dashboard). The working baseline never
+ * drops below current equity, so a stale field is conservative on profitable
+ * days and can only tighten the floor, never loosen it.
  */
-export function computeGuardrails({ initial, equity, todayPnl, riskPct, bufferPct }) {
-  const dayStart = equity - todayPnl;
-  const dailyAllowance = RULES.dailyPctBasis === 'initial'
-    ? RULES.dailyLossPct * initial
-    : RULES.dailyLossPct * dayStart;
-  const dailyFloor = dayStart - dailyAllowance;
+export function computeGuardrails({ initial, equity, dayStart = null, riskPct, bufferPct }) {
+  const baseline = Math.max(dayStart ?? equity, equity);
+  const dailyAllowance = RULES.dailyLossPct * baseline;
+  const dailyFloor = baseline - dailyAllowance;
   const totalFloor = initial * (1 - RULES.maxLossPct);
   const buffer = bufferPct * initial;
 
@@ -81,7 +84,7 @@ export function computeGuardrails({ initial, equity, todayPnl, riskPct, bufferPc
   allowedRiskCash = Math.max(0, allowedRiskCash);
 
   return {
-    dayStart, dailyFloor, totalFloor, buffer,
+    baseline, dayStart: baseline, dailyFloor, totalFloor, buffer,
     dailyRoomNow, totalRoomNow, headroomDaily, headroomTotal,
     requestedRiskCash, allowedRiskCash, capReason,
     breachedDaily: dailyRoomNow <= 0,
@@ -110,7 +113,7 @@ export function computePosition(input) {
   const acctCcy = account.currency;
   const initial = account.initial;
   const equity = account.equity;
-  const todayPnl = account.todayPnl || 0;
+  const dayStart = account.dayStart ?? equity;
 
   if (!(entry > 0)) { out.error = 'need-entry'; return out; }
   if (!(sl > 0)) { out.error = 'need-sl'; return out; }
@@ -146,7 +149,7 @@ export function computePosition(input) {
 
   // Guardrails
   const guard = computeGuardrails({
-    initial, equity, todayPnl, riskPct,
+    initial, equity, dayStart, riskPct,
     bufferPct: input.bufferPct ?? DEFAULTS.bufferPct,
   });
 

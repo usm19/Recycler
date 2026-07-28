@@ -18,9 +18,12 @@ perLotLoss = stopDistance × contractSize × quote→account rate
 lots       = round_DOWN( riskable / perLotLoss , 0.01 )
 ```
 
-- `dailyFloor` = 95% of the day-start baseline — The5ers' daily rule is 5% of the
+- `dailyFloor` = 95% of the day-start value — The5ers' daily rule is 5% of the
   **higher of balance or equity at 00:00 server time**, re-based every day, tested
-  against equity intraday, and a hard breach on High Stakes.
+  against equity intraday, and a hard breach on High Stakes. The app takes this
+  value straight from your dashboard and never lets the working baseline drop
+  below current equity, so a stale entry can only tighten the floor, never
+  loosen it.
 - `maxLossFloor` = 90% of initial balance — static, equity-tested, never trails.
 - `buffer` (default 1% of account) is *always* kept between a full stop-out and
   either floor — the breathing space.

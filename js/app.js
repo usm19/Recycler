@@ -17,7 +17,8 @@ const defaultState = () => ({
     initial: DEFAULTS.accountSize,
     currency: DEFAULTS.accountCurrency,
     equity: DEFAULTS.accountSize,
-    todayPnl: 0,
+    // The5ers daily baseline: higher of balance/equity at 00:00 server time
+    dayStart: DEFAULTS.accountSize,
   },
   bufferPct: DEFAULTS.bufferPct,
   pads: Object.fromEntries(Object.entries(SYMBOLS).map(([k, v]) => [k, v.defaultPadPrice])),
@@ -49,7 +50,12 @@ function loadState() {
     const num = (v, fb, min = 0) => (Number.isFinite(v) && v > min ? v : fb);
     s.account.initial = num(s.account.initial, base.account.initial);
     s.account.equity = num(s.account.equity, s.account.initial);
-    s.account.todayPnl = Number.isFinite(s.account.todayPnl) ? s.account.todayPnl : 0;
+    // migrate old todayPnl-based storage: dayStart = equity − todayPnl
+    if (!Number.isFinite(s.account.dayStart) && Number.isFinite(saved.account?.todayPnl)) {
+      s.account.dayStart = s.account.equity - saved.account.todayPnl;
+    }
+    s.account.dayStart = num(s.account.dayStart, s.account.equity);
+    delete s.account.todayPnl;
     if (s.account.currency !== 'GBP' && s.account.currency !== 'USD') s.account.currency = base.account.currency;
     s.riskPct = Math.min(0.1, Math.max(0.0025, num(s.riskPct, base.riskPct)));
     s.bufferPct = Math.min(0.03, Math.max(0, Number.isFinite(s.bufferPct) ? s.bufferPct : base.bufferPct));
@@ -182,7 +188,7 @@ function showBanner(kind, arg) {
 }
 
 function renderMeters(guard, tradeRisk) {
-  const dailyAllow = guard.dayStart - guard.dailyFloor;
+  const dailyAllow = guard.baseline - guard.dailyFloor;
   const totalAllow = state.account.initial * RULES.maxLossPct;
 
   const items = [
@@ -214,11 +220,11 @@ function render() {
     initial: state.account.initial,
     currency: state.account.currency,
     equity: state.account.equity ?? state.account.initial,
-    todayPnl: state.account.todayPnl || 0,
+    dayStart: state.account.dayStart ?? state.account.initial,
   };
 
   const guardOnly = computeGuardrails({
-    initial: account.initial, equity: account.equity, todayPnl: account.todayPnl,
+    initial: account.initial, equity: account.equity, dayStart: account.dayStart,
     riskPct: state.riskPct, bufferPct: state.bufferPct,
   });
 
@@ -420,7 +426,7 @@ function bindSettings() {
     }
   }, () => state.account.initial);
   bindNum('set-equity', v => { if (v != null && v > 0) state.account.equity = v; }, () => state.account.equity);
-  bindNum('set-pnl', v => { state.account.todayPnl = v ?? 0; }, () => state.account.todayPnl);
+  bindNum('set-daystart', v => { if (v != null && v > 0) state.account.dayStart = v; }, () => state.account.dayStart);
   bindNum('set-pad', v => { if (v != null && v >= 0) state.pads[state.symbol] = v; }, () => state.pads[state.symbol]);
   bindNum('set-comm', v => { if (v != null && v >= 0) state.commissionUSDPerLot = v; }, () => state.commissionUSDPerLot);
   bindNum('set-usdjpy', v => { if (v != null && v > 0) { state.rates.USDJPY = v; state.rates.ts = Date.now(); state.rates.source = 'manual'; } }, () => state.rates.USDJPY);
@@ -428,9 +434,9 @@ function bindSettings() {
 
   $('resetAccount').addEventListener('click', () => {
     state.account.equity = state.account.initial;
-    state.account.todayPnl = 0;
+    state.account.dayStart = state.account.initial;
     $('set-equity').value = String(state.account.equity);
-    $('set-pnl').value = '0';
+    $('set-daystart').value = String(state.account.dayStart);
     save(); render();
   });
 
@@ -452,7 +458,7 @@ function bindSettings() {
   /* initial values */
   $('set-initial').value = String(state.account.initial);
   $('set-equity').value = String(state.account.equity);
-  $('set-pnl').value = String(state.account.todayPnl);
+  $('set-daystart').value = String(state.account.dayStart);
   $('set-comm').value = String(state.commissionUSDPerLot);
   syncMiniSegByData('ccySeg', 'ccy', state.account.currency);
   syncMiniSegByData('bufSeg', 'buf', String(state.bufferPct * 100));
