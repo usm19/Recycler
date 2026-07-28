@@ -31,9 +31,10 @@ lots       = round_DOWN( riskable / perLotLoss , 0.01 )
   gold runs at **1:25 leverage** (metals cut from 1:33 in March 2026), so margin
   genuinely binds on tight-stop gold trades; FX is 1:100.
 - JPY pairs convert via USD/JPY, gold is native USD. When you trade GBPJPY or
-  USDJPY the **entry price itself** is used as the conversion rate — exact, no
-  external data needed. Reference rates for the rest are fetched free
-  (Frankfurter/ECB → open.er-api.com fallback), cached, and manually overridable.
+  USDJPY the **trade's own prices** are the conversion rate — risk converts at
+  the stop, profit at the target — exact, no external data needed. Reference
+  rates for the rest are fetched free (Frankfurter/ECB → open.er-api.com
+  fallback), cached, and manually overridable.
 
 All The5ers rule numbers live in [`js/rules.js`](js/rules.js) — one file to edit
 if the firm ever changes its terms.
@@ -42,7 +43,7 @@ if the firm ever changes its terms.
 
 ```
 python3 -m http.server 8123     # serve
-node --test tests/              # unit tests for the sizing engine
+node --test tests/*.test.mjs    # unit tests for the sizing engine
 ```
 
 ## Deploy

@@ -219,6 +219,35 @@ test('TP on the wrong side warns but still sizes the trade', () => {
   assert.ok(r.lots > 0);
 });
 
+test('missing/null account returns typed error instead of throwing', () => {
+  const r1 = computePosition({ symbol: 'GBPJPY', entry: 192, sl: 191, riskPct: 0.02, rates: { USDJPY: 155, GBPUSD: 1.27 } });
+  assert.equal(r1.ok, false);
+  assert.equal(r1.error, 'need-account');
+  const r2 = computePosition({ symbol: 'GBPJPY', entry: 192, sl: 191, riskPct: 0.02, account: null, rates: {} });
+  assert.equal(r2.error, 'need-account');
+});
+
+test('non-finite inputs are rejected, never NaN/Infinity outputs', () => {
+  const inf = computePosition({ symbol: 'GBPJPY', entry: Infinity, sl: 191, riskPct: 0.02, account: freshGBP, rates: {} });
+  assert.equal(inf.ok, false);
+  assert.equal(inf.error, 'need-entry');
+
+  const nan = computePosition({ symbol: 'USDJPY', entry: 148.5, sl: NaN, riskPct: 0.02, account: freshUSD, rates: {} });
+  assert.equal(nan.error, 'need-sl');
+
+  // Infinity supplied as an external rate must read as "missing", not rate 0
+  const r = computePosition({
+    symbol: 'GBPJPY', entry: 192, sl: 191, riskPct: 0.02,
+    account: freshUSD, rates: { USDJPY: Infinity, GBPUSD: 1.27 },
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'missing-rate');
+
+  const tpInf = computePosition({ symbol: 'XAUUSD', entry: 3350, sl: 3340, tp: Infinity, riskPct: 0.02, account: freshUSD, rates: {} });
+  assert.equal(tpInf.ok, true);
+  assert.equal(tpInf.profitCash, null);   // non-finite TP is ignored
+});
+
 test('SL equal to entry is rejected', () => {
   const r = computePosition({
     symbol: 'USDJPY', entry: 148.5, sl: 148.5,
