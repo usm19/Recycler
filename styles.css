@@ -352,6 +352,82 @@ footer a { color: var(--ink-3); }
 }
 .done-btn:active { transform: scale(0.97); }
 
+/* ---------- take button + journal ---------- */
+.take-btn {
+  width: 100%; height: 48px; margin-top: 14px;
+  border: 0; border-radius: 15px;
+  background: var(--grad); color: #14061f;
+  font: inherit; font-size: 15.5px; font-weight: 800; letter-spacing: 0.2px;
+  cursor: pointer; transition: transform 0.15s ease, opacity 0.25s ease, filter 0.25s ease;
+  box-shadow: 0 5px 20px rgba(167, 139, 250, 0.30);
+  -webkit-tap-highlight-color: transparent;
+}
+.take-btn:active { transform: scale(0.97); }
+.take-btn:disabled {
+  background: var(--surface-2); color: var(--ink-3);
+  box-shadow: none; cursor: default; opacity: 0.7;
+}
+.take-btn.taken { background: rgba(52, 211, 153, 0.18); color: #6ee7b7; box-shadow: none; }
+
+.journal { padding: 16px 18px; }
+.jrnl-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; }
+.jrnl-head h2 { font-size: 11px; font-weight: 800; letter-spacing: 2px; color: var(--ink-3); }
+.jrnl-mode { font-size: 10.5px; font-weight: 700; color: var(--ink-3); letter-spacing: 0.6px; }
+.jrnl-stats { display: grid; grid-template-columns: 1.2fr 1fr 0.8fr; gap: 10px; margin-bottom: 14px; }
+.jstat {
+  background: rgba(255, 255, 255, 0.035); border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 14px; padding: 10px 10px 9px;
+}
+.jstat .s-value { font-size: 19px; font-weight: 750; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.jstat .s-value.pos { color: #6ee7b7; }
+.jstat .s-value.neg { color: #fda4af; }
+.jstat .s-sub { font-size: 10.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+.jrnl-list { list-style: none; margin-top: 12px; max-height: 320px; overflow-y: auto; }
+.jrnl-row {
+  padding: 11px 2px; border-top: 1px solid rgba(255, 255, 255, 0.06);
+  animation: rise 0.3s ease backwards;
+}
+.jr-main {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 13.5px; font-weight: 650; font-variant-numeric: tabular-nums;
+}
+.jr-main .jr-dir {
+  font-size: 9.5px; font-weight: 800; letter-spacing: 0.8px;
+  padding: 2px 7px; border-radius: 999px;
+}
+.jr-dir.long { color: #99f6e4; background: rgba(45, 212, 191, 0.12); }
+.jr-dir.short { color: #fbcfe8; background: rgba(236, 72, 153, 0.12); }
+.jr-main .jr-pnl { margin-left: auto; font-weight: 750; }
+.jr-pnl.pos { color: #6ee7b7; }
+.jr-pnl.neg { color: #fda4af; }
+.jr-status {
+  font-size: 9.5px; font-weight: 800; letter-spacing: 0.8px;
+  padding: 2px 7px; border-radius: 999px; margin-left: auto;
+}
+.jr-status.open { color: #fcd34d; background: rgba(251, 191, 36, 0.12); }
+.jr-sub { font-size: 11px; color: var(--ink-3); margin-top: 3px; font-variant-numeric: tabular-nums; }
+.jr-actions { display: flex; gap: 8px; margin-top: 9px; flex-wrap: wrap; align-items: center; }
+.jr-btn {
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--ink-2); font: inherit; font-size: 12px; font-weight: 700;
+  padding: 7px 12px; border-radius: 10px; cursor: pointer;
+  transition: transform 0.12s ease; -webkit-tap-highlight-color: transparent;
+}
+.jr-btn:active { transform: scale(0.94); }
+.jr-btn.win { color: #6ee7b7; border-color: rgba(52, 211, 153, 0.35); }
+.jr-btn.loss { color: #fda4af; border-color: rgba(248, 113, 113, 0.35); }
+.jr-btn.del { color: var(--ink-3); padding: 7px 10px; margin-left: auto; }
+.jr-close-input {
+  width: 110px; background: rgba(255, 255, 255, 0.06); border: 1px solid var(--border);
+  border-radius: 10px; color: var(--ink); font: inherit; font-size: 13px; font-weight: 650;
+  padding: 6px 9px; outline: none; font-variant-numeric: tabular-nums;
+}
+.jrnl-empty { font-size: 12.5px; color: var(--ink-3); text-align: center; padding: 14px 0 6px; }
+.jrnl-empty b { color: var(--ink-2); }
+.set-row.locked input { opacity: 0.5; pointer-events: none; }
+.set-row.locked label small::after { content: " · set by journal"; color: var(--cyan); }
+
 /* pulse when the lot number lands */
 @keyframes pop { 0% { transform: scale(1); } 35% { transform: scale(1.035); } 100% { transform: scale(1); } }
 .lots-line.pop { animation: pop 0.35s ease; }

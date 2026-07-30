@@ -39,6 +39,24 @@ lots       = round_DOWN( riskable / perLotLoss , 0.01 )
 All The5ers rule numbers live in [`js/rules.js`](js/rules.js) — one file to edit
 if the firm ever changes its terms.
 
+## Trade journal (tracked account)
+
+Tap **Take this trade** after sizing and the trade is logged against a simulated
+challenge account that starts at your account size. Resolving trades (target
+hit / stopped out / custom close) moves the balance: stop-outs charge the full
+padded risk the app sized with, wins convert at the target price net of
+commission. The journal then drives the guardrails automatically —
+
+- equity and the day-start baseline sync from realized P&L, re-basing at 00:00
+  server time (GMT+2/+3 with EU DST handled),
+- risk committed to **open** trades is subtracted from the next trade's
+  allowance so stacked positions can't jointly breach,
+- the history is scanned for daily-loss and max-loss breaches (intraday running
+  P&L, exactly as The5ers would judge it), and Step-1 progress plus the
+  3-profitable-days requirement are tracked.
+
+Settings → Tracking switches between Journal (auto) and Manual mode.
+
 ## Develop
 
 ```
