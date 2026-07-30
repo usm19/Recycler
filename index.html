@@ -113,6 +113,7 @@
     </div>
 
     <div class="hero-fine" id="heroFine"></div>
+    <button class="take-btn" id="takeBtn" disabled>Take this trade</button>
     <div class="banner" id="banner"><span class="b-ico" id="bannerIco">⚠︎</span><span id="bannerText"></span></div>
   </section>
 
@@ -136,6 +137,39 @@
     </div>
   </section>
 
+  <section class="card journal">
+    <div class="jrnl-head">
+      <h2>TRACKED ACCOUNT</h2>
+      <span class="jrnl-mode" id="jrnlMode"></span>
+    </div>
+    <div class="jrnl-stats">
+      <div class="jstat">
+        <div class="s-label">BALANCE</div>
+        <div class="s-value" id="jrnlBalance">—</div>
+      </div>
+      <div class="jstat">
+        <div class="s-label">P&amp;L</div>
+        <div class="s-value" id="jrnlPnl">—</div>
+      </div>
+      <div class="jstat">
+        <div class="s-label">TRADES</div>
+        <div class="s-value" id="jrnlCount">0</div>
+        <div class="s-sub" id="jrnlWl">&nbsp;</div>
+      </div>
+    </div>
+    <div class="meter">
+      <div class="meter-head">
+        <span class="meter-name">Step 1 target (8%)</span>
+        <span class="meter-val" id="jrnlStepVal">0%</span>
+      </div>
+      <div class="meter-track"><div class="meter-fill ok" id="jrnlStepFill" style="width:0%"></div></div>
+      <div class="meter-sub" id="jrnlDays"></div>
+    </div>
+    <div class="banner" id="jrnlBanner"><span class="b-ico" id="jrnlBannerIco">✕</span><span id="jrnlBannerText"></span></div>
+    <ul class="jrnl-list" id="jrnlList"></ul>
+    <div class="jrnl-empty" id="jrnlEmpty">No trades yet — size one above and tap <b>Take this trade</b>.</div>
+  </section>
+
   <footer id="footNote"></footer>
 </main>
 
@@ -146,6 +180,13 @@
 
   <h3>ACCOUNT</h3>
   <div class="set-card">
+    <div class="set-row">
+      <label>Tracking<small>journal drives equity &amp; day-start automatically</small></label>
+      <div class="mini-seg" id="trackSeg">
+        <button data-track="journal">Journal</button>
+        <button data-track="manual">Manual</button>
+      </div>
+    </div>
     <div class="set-row">
       <label>Account size</label>
       <input type="text" inputmode="decimal" id="set-initial" aria-label="Account size">
@@ -166,7 +207,7 @@
       <input type="text" inputmode="decimal" id="set-daystart" aria-label="Day-start value">
     </div>
   </div>
-  <button class="text-btn" id="resetAccount">Reset to fresh account</button>
+  <button class="text-btn" id="resetAccount">Reset account &amp; clear journal</button>
 
   <h3>SAFETY</h3>
   <div class="set-card">

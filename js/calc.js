@@ -63,18 +63,23 @@ export function conversionRate(from, to, ctx, atPrice = null) {
  * 00:00 server time (shown on the dashboard). The working baseline never
  * drops below current equity, so a stale field is conservative on profitable
  * days and can only tighten the floor, never loosen it.
+ *
+ * openRiskCash: worst-case loss already committed to open positions. It is
+ * subtracted from both headrooms so a new trade plus every open stop hitting
+ * together still clears the floors.
  */
-export function computeGuardrails({ initial, equity, dayStart = null, riskPct, bufferPct }) {
+export function computeGuardrails({ initial, equity, dayStart = null, riskPct, bufferPct, openRiskCash = 0 }) {
   const baseline = Math.max(dayStart ?? equity, equity);
   const dailyAllowance = RULES.dailyLossPct * baseline;
   const dailyFloor = baseline - dailyAllowance;
   const totalFloor = initial * (1 - RULES.maxLossPct);
   const buffer = bufferPct * initial;
+  const openRisk = Math.max(0, openRiskCash || 0);
 
   const dailyRoomNow = equity - dailyFloor;
   const totalRoomNow = equity - totalFloor;
-  const headroomDaily = dailyRoomNow - buffer;
-  const headroomTotal = totalRoomNow - buffer;
+  const headroomDaily = dailyRoomNow - buffer - openRisk;
+  const headroomTotal = totalRoomNow - buffer - openRisk;
 
   const requestedRiskCash = riskPct * equity;
   let allowedRiskCash = Math.min(requestedRiskCash, headroomDaily, headroomTotal);
@@ -85,7 +90,7 @@ export function computeGuardrails({ initial, equity, dayStart = null, riskPct, b
   allowedRiskCash = Math.max(0, allowedRiskCash);
 
   return {
-    baseline, dayStart: baseline, dailyFloor, totalFloor, buffer,
+    baseline, dayStart: baseline, dailyFloor, totalFloor, buffer, openRisk,
     dailyRoomNow, totalRoomNow, headroomDaily, headroomTotal,
     requestedRiskCash, allowedRiskCash, capReason,
     breachedDaily: dailyRoomNow <= 0,
@@ -153,6 +158,7 @@ export function computePosition(input) {
   const guard = computeGuardrails({
     initial, equity, dayStart, riskPct,
     bufferPct: input.bufferPct ?? DEFAULTS.bufferPct,
+    openRiskCash: input.openRiskCash ?? 0,
   });
 
   if (guard.breachedTotal) warnings.push({ code: 'breached-total', level: 'critical' });

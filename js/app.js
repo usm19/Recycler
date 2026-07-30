@@ -1,5 +1,6 @@
 import { computePosition, computeGuardrails } from './calc.js';
 import { RULES, SYMBOLS, DEFAULTS } from './rules.js';
+import { computeJournal, resolvePnl } from './journal.js';
 
 /* ---------------- state ---------------- */
 
@@ -24,6 +25,8 @@ const defaultState = () => ({
   pads: Object.fromEntries(Object.entries(SYMBOLS).map(([k, v]) => [k, v.defaultPadPrice])),
   commissionUSDPerLot: RULES.commissionUSDPerLot.fx,
   rates: { USDJPY: null, GBPUSD: null, ts: null, source: null },
+  tracking: 'journal',                       // 'journal' | 'manual'
+  journal: { currency: null, trades: [] },
 });
 
 function loadState() {
@@ -67,6 +70,22 @@ function loadState() {
     for (const r of ['USDJPY', 'GBPUSD']) {
       if (!(Number.isFinite(s.rates[r]) && s.rates[r] > 0)) s.rates[r] = null;
     }
+    // journal: keep only well-formed trades
+    if (s.tracking !== 'journal' && s.tracking !== 'manual') s.tracking = base.tracking;
+    const j = saved.journal || {};
+    const finPos = v => Number.isFinite(v) && v > 0;
+    const trades = Array.isArray(j.trades) ? j.trades.filter(t =>
+      t && SYMBOLS[t.symbol]
+      && (t.direction === 'long' || t.direction === 'short')
+      && finPos(t.entry) && finPos(t.sl) && finPos(t.lots) && finPos(t.riskCash)
+      && (t.currency === 'GBP' || t.currency === 'USD')
+      && ['open', 'won', 'lost', 'closed'].includes(t.status)
+      && (t.status === 'open' || Number.isFinite(t.pnlCash))
+    ) : [];
+    s.journal = {
+      currency: j.currency === 'GBP' || j.currency === 'USD' ? j.currency : (trades[0]?.currency ?? null),
+      trades,
+    };
     return s;
   } catch { return base; }
 }
@@ -94,11 +113,16 @@ function parseNum(str) {
 
 function ccySymbol() { return state.account.currency === 'GBP' ? '£' : '$'; }
 
-function fmtMoney(x, decimals = null) {
+function fmtMoneyIn(ccy, x, decimals = null, signed = false) {
   if (x == null || !Number.isFinite(x)) return '—';
   const d = decimals ?? (Math.abs(x) >= 100 ? 0 : 2);
   const s = Math.abs(x).toLocaleString('en-GB', { minimumFractionDigits: d, maximumFractionDigits: d });
-  return (x < 0 ? '−' : '') + ccySymbol() + s;
+  const sym = ccy === 'GBP' ? '£' : '$';
+  return (x < 0 ? '−' : signed && x > 0 ? '+' : '') + sym + s;
+}
+
+function fmtMoney(x, decimals = null) {
+  return fmtMoneyIn(state.account.currency, x, decimals);
 }
 
 function fmtPct(x, d = 1) {
@@ -204,10 +228,11 @@ function renderMeters(guard, tradeRisk) {
     el.style.width = `${frac * 100}%`;
     el.className = 'meter-fill ' + (frac > 0.5 ? 'ok' : frac > 0.2 ? 'warn' : 'bad');
     $(it.val).textContent = fmtMoney(Math.max(0, it.room));
-    const after = it.room - (tradeRisk || 0);
+    const after = it.room - (tradeRisk || 0) - guard.openRisk;
+    const open = guard.openRisk > 0 ? ` · ${fmtMoney(guard.openRisk)} committed to open trades` : '';
     $(it.sub).textContent = tradeRisk > 0
-      ? `floor ${fmtMoney(it.floor)} · ${fmtMoney(Math.max(0, after))} room if this stop hits`
-      : `floor ${fmtMoney(it.floor)}`;
+      ? `floor ${fmtMoney(it.floor)} · ${fmtMoney(Math.max(0, after))} room if every stop hits${open}`
+      : `floor ${fmtMoney(it.floor)}${open}`;
   }
 }
 
@@ -219,16 +244,29 @@ function render() {
   const sl = parseNum(vals.sl);
   const tp = parseNum(vals.tp);
 
-  const account = {
-    initial: state.account.initial,
-    currency: state.account.currency,
-    equity: state.account.equity ?? state.account.initial,
-    dayStart: state.account.dayStart ?? state.account.initial,
-  };
+  const jrnl = computeJournal(state.journal.trades, state.account.initial, Date.now());
+  // journal drives the account only when its currency matches the account's
+  const journalActive = state.tracking === 'journal'
+    && (state.journal.currency == null || state.journal.currency === state.account.currency);
+
+  const account = journalActive
+    ? {
+      initial: state.account.initial,
+      currency: state.account.currency,
+      equity: jrnl.balance,
+      dayStart: jrnl.dayStart,
+    }
+    : {
+      initial: state.account.initial,
+      currency: state.account.currency,
+      equity: state.account.equity ?? state.account.initial,
+      dayStart: state.account.dayStart ?? state.account.initial,
+    };
+  const openRiskCash = journalActive ? jrnl.openRisk : 0;
 
   const guardOnly = computeGuardrails({
     initial: account.initial, equity: account.equity, dayStart: account.dayStart,
-    riskPct: state.riskPct, bufferPct: state.bufferPct,
+    riskPct: state.riskPct, bufferPct: state.bufferPct, openRiskCash,
   });
 
   const lotsEl = $('lotsValue');
@@ -244,8 +282,13 @@ function render() {
       padPrice: state.pads[sym],
       commissionUSDPerLot: state.commissionUSDPerLot,
       bufferPct: state.bufferPct,
+      openRiskCash,
     });
   }
+  lastSized = result?.ok && result.lots > 0
+    ? { result, entry, sl, tp, symbol: sym, currency: account.currency }
+    : null;
+  updateTakeBtn();
 
   /* direction chip */
   if (result?.ok) {
@@ -325,10 +368,169 @@ function render() {
   }
 
   renderMeters(guardOnly, result?.ok ? result.actualRiskCash : 0);
+  renderJournal(jrnl, journalActive);
 
   $('footNote').innerHTML =
     `${RULES.program} · daily loss ${fmtPct(RULES.dailyLossPct)} · max loss ${fmtPct(RULES.maxLossPct)} · buffer ${fmtPct(state.bufferPct)}<br>` +
     `Sizing always rounds down and keeps your buffer clear of both floors. Verify on your The5ers dashboard.`;
+}
+
+/* ---------------- trade journal ---------------- */
+
+let lastSized = null;      // the currently displayed valid sizing, if any
+let closingId = null;      // trade id showing the custom-close input
+let confirmingDeleteId = null;
+
+function updateTakeBtn() {
+  const btn = $('takeBtn');
+  if (btn.classList.contains('taken')) return;   // mid-confirmation flash
+  const ccyMismatch = state.journal.currency && state.journal.currency !== state.account.currency;
+  btn.disabled = !lastSized || ccyMismatch;
+  btn.textContent = ccyMismatch
+    ? `Journal is in ${state.journal.currency} — switch currency back to log trades`
+    : 'Take this trade';
+}
+
+function takeTrade() {
+  if (!lastSized) return;
+  const { result: r, entry, sl, tp, symbol, currency } = lastSized;
+  state.journal.trades.push({
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    symbol, currency,
+    direction: r.direction,
+    entry, sl,
+    tp: tp != null && Number.isFinite(tp) && tp > 0 && r.tpValid ? tp : null,
+    lots: r.lots,
+    riskCash: r.actualRiskCash,
+    commissionCashPerLot: r.perLotCommission,
+    rates: { USDJPY: state.rates.USDJPY, GBPUSD: state.rates.GBPUSD },
+    openedAt: Date.now(),
+    status: 'open',
+  });
+  state.journal.currency = state.journal.currency ?? currency;
+  save();
+  const btn = $('takeBtn');
+  btn.classList.add('taken');
+  btn.textContent = '✓ Logged to journal';
+  setTimeout(() => { btn.classList.remove('taken'); updateTakeBtn(); }, 1400);
+  render();
+}
+
+function resolveTrade(id, outcome, exitPrice = null) {
+  const t = state.journal.trades.find(x => x.id === id);
+  if (!t || t.status !== 'open') return;
+  const pnl = resolvePnl(t, outcome, exitPrice);
+  if (pnl == null) return;
+  t.status = outcome;
+  t.closedAt = Date.now();
+  if (outcome === 'closed') t.exitPrice = exitPrice;
+  t.pnlCash = pnl;
+  closingId = null;
+  save(); render();
+}
+
+function deleteTrade(id) {
+  state.journal.trades = state.journal.trades.filter(t => t.id !== id);
+  if (state.journal.trades.length === 0) state.journal.currency = null;
+  confirmingDeleteId = null;
+  closingId = null;
+  save(); render();
+}
+
+const fmtWhen = ts => new Date(ts).toLocaleString('en-GB', {
+  weekday: 'short', hour: '2-digit', minute: '2-digit',
+});
+
+function renderJournal(jrnl, journalActive) {
+  const jCcy = state.journal.currency ?? state.account.currency;
+  const fmtJ = (x, d = null, signed = false) => fmtMoneyIn(jCcy, x, d, signed);
+  const spec = s => SYMBOLS[s] || { priceDecimals: 2 };
+
+  $('jrnlMode').textContent = state.tracking === 'journal'
+    ? (journalActive ? 'driving the sizing above' : `in ${jCcy} — currency mismatch`)
+    : 'display only · manual mode';
+
+  const balEl = $('jrnlBalance');
+  balEl.textContent = fmtJ(jrnl.balance);
+  balEl.className = 's-value' + (jrnl.realizedTotal > 0 ? ' pos' : jrnl.realizedTotal < 0 ? ' neg' : '');
+  const pnlEl = $('jrnlPnl');
+  pnlEl.textContent = fmtJ(jrnl.realizedTotal, null, true);
+  pnlEl.className = 's-value' + (jrnl.realizedTotal > 0 ? ' pos' : jrnl.realizedTotal < 0 ? ' neg' : '');
+  $('jrnlCount').textContent = String(jrnl.tradeCount);
+  $('jrnlWl').textContent = jrnl.wins + jrnl.losses > 0
+    ? `${jrnl.wins}W · ${jrnl.losses}L${jrnl.openCount ? ` · ${jrnl.openCount} open` : ''}`
+    : (jrnl.openCount ? `${jrnl.openCount} open` : ' ');
+
+  $('jrnlStepVal').textContent = `${Math.round(jrnl.stepProgress * 100)}%`;
+  const stepFill = $('jrnlStepFill');
+  stepFill.style.width = `${jrnl.stepProgress * 100}%`;
+  stepFill.className = 'meter-fill ' + (jrnl.realizedTotal < 0 ? 'warn' : 'ok');
+  $('jrnlDays').textContent =
+    `profitable days ${Math.min(jrnl.profitableDays, RULES.minProfitableDays)}/${RULES.minProfitableDays}` +
+    ` (≥ ${fmtJ(RULES.profitableDayPct * state.account.initial)}) · target ${fmtJ(RULES.targets.step1 * state.account.initial)}`;
+
+  const jb = $('jrnlBanner');
+  if (jrnl.breaches.length) {
+    const b = jrnl.breaches[0];
+    jb.className = 'banner show bad';
+    $('jrnlBannerText').innerHTML =
+      `<b>This account would have breached.</b> On ${b.day} equity hit ${fmtJ(b.equity)}, below the ${b.kind === 'daily' ? 'daily-loss' : 'max-loss'} floor of ${fmtJ(b.floor)}. On the real challenge that ends the account.`;
+  } else {
+    jb.className = 'banner';
+  }
+
+  const list = $('jrnlList');
+  const rows = [...state.journal.trades].sort((a, b) => b.openedAt - a.openedAt);
+  $('jrnlEmpty').style.display = rows.length ? 'none' : '';
+  list.innerHTML = rows.map(t => {
+    const d = spec(t.symbol).priceDecimals;
+    const head =
+      `<b>${t.symbol}</b><span class="jr-dir ${t.direction}">${t.direction.toUpperCase()}</span>` +
+      `<span>${t.lots.toFixed(2)} @ ${t.entry.toFixed(d)}</span>`;
+    if (t.status === 'open') {
+      const closeUI = closingId === t.id
+        ? `<input class="jr-close-input" id="close-in-${t.id}" type="text" inputmode="decimal" placeholder="exit price" autocomplete="off">` +
+          `<button class="jr-btn win" data-act="close-ok" data-id="${t.id}">OK</button>` +
+          `<button class="jr-btn" data-act="close-cancel" data-id="${t.id}">Cancel</button>`
+        : (t.tp != null ? `<button class="jr-btn win" data-act="won" data-id="${t.id}">🎯 Target hit</button>` : '') +
+          `<button class="jr-btn loss" data-act="lost" data-id="${t.id}">Stopped out</button>` +
+          `<button class="jr-btn" data-act="close" data-id="${t.id}">Close @…</button>`;
+      return `<li class="jrnl-row">
+        <div class="jr-main">${head}<span class="jr-status open">OPEN</span></div>
+        <div class="jr-sub">SL ${t.sl.toFixed(d)}${t.tp != null ? ` · TP ${t.tp.toFixed(d)}` : ''} · risk ${fmtJ(t.riskCash)} · ${fmtWhen(t.openedAt)}</div>
+        <div class="jr-actions">${closeUI}<button class="jr-btn del" data-act="del" data-id="${t.id}">${confirmingDeleteId === t.id ? 'Sure?' : '✕'}</button></div>
+      </li>`;
+    }
+    const cls = t.pnlCash > 0 ? 'pos' : 'neg';
+    const how = t.status === 'won' ? `target ${t.tp.toFixed(d)}`
+      : t.status === 'lost' ? `stopped ${t.sl.toFixed(d)}`
+      : `closed ${Number(t.exitPrice).toFixed(d)}`;
+    return `<li class="jrnl-row">
+      <div class="jr-main">${head}<span class="jr-pnl ${cls}">${fmtJ(t.pnlCash, null, true)}</span></div>
+      <div class="jr-sub">${how} · ${fmtWhen(t.closedAt)}<button class="jr-btn del" data-act="del" data-id="${t.id}" style="float:right;padding:2px 8px">${confirmingDeleteId === t.id ? 'Sure?' : '✕'}</button></div>
+    </li>`;
+  }).join('');
+}
+
+function bindJournal() {
+  $('takeBtn').addEventListener('click', takeTrade);
+  $('jrnlList').addEventListener('click', e => {
+    const btn = e.target.closest('[data-act]');
+    if (!btn) return;
+    const { act, id } = btn.dataset;
+    if (act === 'won' || act === 'lost') { resolveTrade(id, act); return; }
+    if (act === 'close') { closingId = id; confirmingDeleteId = null; render(); $(`close-in-${id}`)?.focus(); return; }
+    if (act === 'close-cancel') { closingId = null; render(); return; }
+    if (act === 'close-ok') {
+      const v = parseNum($(`close-in-${id}`)?.value ?? '');
+      if (v != null && v > 0) resolveTrade(id, 'closed', v);
+      return;
+    }
+    if (act === 'del') {
+      if (confirmingDeleteId === id) deleteTrade(id);
+      else { confirmingDeleteId = id; render(); setTimeout(() => { if (confirmingDeleteId === id) { confirmingDeleteId = null; render(); } }, 2500); }
+    }
+  });
 }
 
 /* ---------------- FX rates ---------------- */
@@ -398,8 +600,25 @@ function syncRateFields() {
 
 /* ---------------- settings sheet ---------------- */
 
+function syncTrackUI() {
+  syncMiniSegByData('trackSeg', 'track', state.tracking);
+  const jrnl = computeJournal(state.journal.trades, state.account.initial, Date.now());
+  const active = state.tracking === 'journal'
+    && (state.journal.currency == null || state.journal.currency === state.account.currency);
+  const vals = [
+    ['set-equity', active ? jrnl.balance : state.account.equity],
+    ['set-daystart', active ? jrnl.dayStart : state.account.dayStart],
+  ];
+  for (const [id, val] of vals) {
+    const input = $(id);
+    input.closest('.set-row').classList.toggle('locked', active);
+    if (document.activeElement !== input) input.value = String(Math.round(val * 100) / 100);
+  }
+}
+
 function openSheet() {
   syncRateFields();
+  syncTrackUI();
   $('set-pad').value = String(state.pads[state.symbol]);
   $('sheet').classList.add('show');
   $('backdrop').classList.add('show');
@@ -443,12 +662,27 @@ function bindSettings() {
   bindNum('set-usdjpy', v => { if (v != null && v > 0) { state.rates.USDJPY = v; state.rates.ts = Date.now(); state.rates.source = 'manual'; } }, () => state.rates.USDJPY);
   bindNum('set-gbpusd', v => { if (v != null && v > 0) { state.rates.GBPUSD = v; state.rates.ts = Date.now(); state.rates.source = 'manual'; } }, () => state.rates.GBPUSD);
 
-  $('resetAccount').addEventListener('click', () => {
+  let resetArmed = false;
+  $('resetAccount').addEventListener('click', e => {
+    if (!resetArmed && state.journal.trades.length) {
+      resetArmed = true;
+      e.target.textContent = 'This clears all journal trades — tap again to confirm';
+      setTimeout(() => { resetArmed = false; e.target.textContent = 'Reset account & clear journal'; }, 3000);
+      return;
+    }
+    resetArmed = false;
+    e.target.textContent = 'Reset account & clear journal';
+    state.journal.trades = [];
+    state.journal.currency = null;
     state.account.equity = state.account.initial;
     state.account.dayStart = state.account.initial;
-    $('set-equity').value = String(state.account.equity);
-    $('set-daystart').value = String(state.account.dayStart);
-    save(); render();
+    save(); syncTrackUI(); render();
+  });
+
+  $('trackSeg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    state.tracking = b.dataset.track;
+    save(); syncTrackUI(); render();
   });
 
   $('ccySeg').addEventListener('click', e => {
@@ -473,6 +707,7 @@ function bindSettings() {
   $('set-comm').value = String(state.commissionUSDPerLot);
   syncMiniSegByData('ccySeg', 'ccy', state.account.currency);
   syncMiniSegByData('bufSeg', 'buf', String(state.bufferPct * 100));
+  syncTrackUI();
   syncRateFields();
 
   /* rules list */
@@ -592,6 +827,7 @@ function startStars() {
 
 bindTradeInputs();
 bindSettings();
+bindJournal();
 setRisk(state.riskPct * 100);
 setSymbol(state.symbol, false);
 startStars();
