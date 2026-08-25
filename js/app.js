@@ -1,5 +1,5 @@
 import { computePosition, computeGuardrails } from './calc.js';
-import { RULES, SYMBOLS, DEFAULTS } from './rules.js';
+import { RULES, SYMBOLS, DEFAULTS, RATE_PAIRS } from './rules.js';
 import { computeJournal, resolvePnl } from './journal.js';
 
 /* ---------------- state ---------------- */
@@ -8,11 +8,7 @@ const STORE_KEY = 'nebula-v1';
 
 const defaultState = () => ({
   symbol: 'GBPJPY',
-  inputs: {
-    GBPJPY: { entry: '', sl: '', tp: '' },
-    XAUUSD: { entry: '', sl: '', tp: '' },
-    USDJPY: { entry: '', sl: '', tp: '' },
-  },
+  inputs: Object.fromEntries(Object.keys(SYMBOLS).map(k => [k, { entry: '', sl: '', tp: '' }])),
   riskPct: DEFAULTS.riskPct,
   account: {
     initial: DEFAULTS.accountSize,
@@ -24,9 +20,9 @@ const defaultState = () => ({
   bufferPct: DEFAULTS.bufferPct,
   pads: Object.fromEntries(Object.entries(SYMBOLS).map(([k, v]) => [k, v.defaultPadPrice])),
   commissionUSDPerLot: RULES.commissionUSDPerLot.fx,
-  rates: { USDJPY: null, GBPUSD: null, ts: null, source: null },
+  rates: { ...Object.fromEntries(RATE_PAIRS.map(p => [p.key, null])), ts: null, source: null },
   tracking: 'journal',                       // 'journal' | 'manual'
-  journal: { currency: null, trades: [] },
+  journal: { currency: null, initial: null, trades: [] },
 });
 
 function loadState() {
@@ -62,29 +58,44 @@ function loadState() {
     delete s.account.todayPnl;
     if (s.account.currency !== 'GBP' && s.account.currency !== 'USD') s.account.currency = base.account.currency;
     // clamp to the UI's actual ranges; anything outside falls back to defaults
-    s.riskPct = Math.min(0.04, Math.max(0.0025, num(s.riskPct, base.riskPct)));
+    const rawRisk = Math.min(0.02, Math.max(0.0025, num(s.riskPct, base.riskPct)));
+    s.riskPct = Math.round(rawRisk * 400) / 400;   // 0.25% grid, matching the slider
     s.bufferPct = Number.isFinite(s.bufferPct) && s.bufferPct >= 0 && s.bufferPct <= 0.03
       ? s.bufferPct : base.bufferPct;
     s.commissionUSDPerLot = Number.isFinite(s.commissionUSDPerLot) && s.commissionUSDPerLot >= 0
       ? s.commissionUSDPerLot : base.commissionUSDPerLot;
-    for (const r of ['USDJPY', 'GBPUSD']) {
-      if (!(Number.isFinite(s.rates[r]) && s.rates[r] > 0)) s.rates[r] = null;
+    for (const p of RATE_PAIRS) {
+      if (!(Number.isFinite(s.rates[p.key]) && s.rates[p.key] > 0)) s.rates[p.key] = null;
     }
     // journal: keep only well-formed trades
     if (s.tracking !== 'journal' && s.tracking !== 'manual') s.tracking = base.tracking;
     const j = saved.journal || {};
     const finPos = v => Number.isFinite(v) && v > 0;
-    const trades = Array.isArray(j.trades) ? j.trades.filter(t =>
+    const usable = t =>
       t && SYMBOLS[t.symbol]
       && (t.direction === 'long' || t.direction === 'short')
       && finPos(t.entry) && finPos(t.sl) && finPos(t.lots) && finPos(t.riskCash)
+      && Number.isFinite(t.openedAt)
       && (t.currency === 'GBP' || t.currency === 'USD')
       && ['open', 'won', 'lost', 'closed'].includes(t.status)
-      && (t.status === 'open' || Number.isFinite(t.pnlCash))
-    ) : [];
+      && (t.status === 'open' || (Number.isFinite(t.pnlCash) && Number.isFinite(t.closedAt)))
+      && (t.status !== 'closed' || finPos(t.exitPrice));
+    const rawTrades = Array.isArray(j.trades) ? j.trades : [];
+    const trades = rawTrades.filter(usable).map(t => ({
+      ...t,
+      id: typeof t.id === 'string' ? t.id : Math.random().toString(36).slice(2),
+      tp: finPos(t.tp) ? t.tp : null,
+      commissionCashPerLot: Number.isFinite(t.commissionCashPerLot) ? t.commissionCashPerLot : 0,
+      rates: t.rates && typeof t.rates === 'object' ? t.rates : {},
+    }));
+    // Anything unusable is parked, never deleted — a symbol table change or a
+    // half-written record must not silently destroy trade history.
+    const quarantined = [...(Array.isArray(j.quarantined) ? j.quarantined : []), ...rawTrades.filter(t => !usable(t))];
     s.journal = {
       currency: j.currency === 'GBP' || j.currency === 'USD' ? j.currency : (trades[0]?.currency ?? null),
+      initial: finPos(j.initial) ? j.initial : null,
       trades,
+      ...(quarantined.length ? { quarantined } : {}),
     };
     return s;
   } catch { return base; }
@@ -92,12 +103,25 @@ function loadState() {
 
 const state = loadState();
 let saveTimer = null;
-function save() {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch { /* full/private mode */ }
-  }, 150);
+function writeState() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch { /* full/private mode */ }
 }
+
+function save({ now = false } = {}) {
+  clearTimeout(saveTimer);
+  if (now) { writeState(); return; }
+  saveTimer = setTimeout(writeState, 150);
+}
+
+// Another tab wrote the shared state — adopt it rather than clobbering it.
+addEventListener('storage', e => {
+  if (e.key !== STORE_KEY || e.newValue == null) return;
+  Object.assign(state, loadState());
+  syncSettingsFields();
+  setRisk(state.riskPct * 100);
+  setSymbol(state.symbol, false);
+});
+addEventListener('pagehide', () => { clearTimeout(saveTimer); writeState(); });
 
 /* ---------------- helpers ---------------- */
 
@@ -107,6 +131,9 @@ function parseNum(str) {
   if (typeof str !== 'string') return null;
   // commas are thousands separators ("10,000"), never decimal points
   const s = str.trim().replace(/\s/g, '').replace(/−/g, '-').replace(/,/g, '');
+  // Whole-string match only: "1.2.3" or "195abc" is rejected outright rather
+  // than silently truncated to a number the field doesn't show.
+  if (!/^[+-]?(\d+\.?\d*|\.\d+)$/.test(s)) return null;
   const v = parseFloat(s);
   return Number.isFinite(v) ? v : null;
 }
@@ -123,6 +150,16 @@ function fmtMoneyIn(ccy, x, decimals = null, signed = false) {
 
 function fmtMoney(x, decimals = null) {
   return fmtMoneyIn(state.account.currency, x, decimals);
+}
+
+/** The account size the journal simulates — frozen when its first trade was logged. */
+function journalInitial() {
+  return state.journal.initial ?? state.account.initial;
+}
+
+/** Only the reference rates, snapshotted for the engine / a logged trade. */
+function ratesSnapshot() {
+  return Object.fromEntries(RATE_PAIRS.map(p => [p.key, state.rates[p.key]]));
 }
 
 function fmtPct(x, d = 1) {
@@ -149,22 +186,48 @@ function tween(el, target, format, dur = 340) {
 
 /* ---------------- symbol control ---------------- */
 
-const SYMBOL_ORDER = ['GBPJPY', 'XAUUSD', 'USDJPY'];
+const SYMBOL_ORDER = Object.keys(SYMBOLS);
+// Sensible starting prices near current market, so the fields hint the format.
 const PLACEHOLDERS = {
-  GBPJPY: { entry: '195.500', sl: '195.000', tp: '196.500' },
-  XAUUSD: { entry: '3350.00', sl: '3340.00', tp: '3370.00' },
-  USDJPY: { entry: '148.500', sl: '148.000', tp: '149.500' },
+  XAUUSD: { entry: '4625.00', sl: '4610.00', tp: '4655.00' },
+  GBPJPY: { entry: '217.180', sl: '216.780', tp: '217.980' },
+  EURJPY: { entry: '185.770', sl: '185.470', tp: '186.370' },
+  GBPUSD: { entry: '1.36450', sl: '1.36150', tp: '1.37050' },
+  USDJPY: { entry: '159.160', sl: '158.860', tp: '159.760' },
+  USDCAD: { entry: '1.38470', sl: '1.38170', tp: '1.39070' },
+  AUDUSD: { entry: '0.71590', sl: '0.71290', tp: '0.72190' },
 };
+
+/** Build the symbol buttons from the symbol table. */
+function buildSymbolButtons() {
+  const seg = $('symbolSeg');
+  if (!seg) return;
+  for (const key of SYMBOL_ORDER) {
+    const b = document.createElement('button');
+    b.dataset.symbol = key;
+    b.textContent = SYMBOLS[key].short;
+    b.setAttribute('aria-label', SYMBOLS[key].label);
+    seg.appendChild(b);
+  }
+}
+
+/** Park the puck over the active button — works for any wrapped layout. */
+function movePuck(animate = true) {
+  const btn = $('symbolSeg')?.querySelector(`button[data-symbol="${state.symbol}"]`);
+  const puck = $('segPuck');
+  if (!btn || !puck) return;
+  if (!animate) puck.style.transition = 'none';
+  puck.style.width = `${btn.offsetWidth}px`;
+  puck.style.height = `${btn.offsetHeight}px`;
+  puck.style.transform = `translate(${btn.offsetLeft}px, ${btn.offsetTop - 4}px)`;
+  if (!animate) requestAnimationFrame(() => { puck.style.transition = ''; });
+}
 
 function setSymbol(sym, animate = true) {
   state.symbol = sym;
-  const idx = SYMBOL_ORDER.indexOf(sym);
-  const puck = $('segPuck');
-  if (!animate) puck.style.transition = 'none';
-  puck.style.transform = `translateX(${idx * 100}%)`;
-  if (!animate) requestAnimationFrame(() => { puck.style.transition = ''; });
   document.querySelectorAll('#symbolSeg button').forEach(b =>
     b.classList.toggle('on', b.dataset.symbol === sym));
+  movePuck(animate);
   const ph = PLACEHOLDERS[sym];
   const vals = state.inputs[sym];
   for (const k of ['entry', 'sl', 'tp']) {
@@ -196,11 +259,18 @@ function setRisk(pct, { fromSlider = false } = {}) {
 const BANNERS = {
   breachedTotal: () => ['bad', '✕', `<b>Max-loss breached.</b> Equity is at or below the ${fmtPct(RULES.maxLossPct)} overall floor. Do not trade — check your dashboard.`],
   breachedDaily: () => ['bad', '✕', `<b>Daily limit breached.</b> Equity is at or below today's ${fmtPct(RULES.dailyLossPct)} floor — on High Stakes this terminates the account. Check your dashboard before doing anything.`],
-  missingRate: m => ['warn', '↺', `<b>Need the ${m === 'GBPUSD' ? 'GBP/USD' : 'USD/JPY'} rate</b> to convert this pair. Tap ⚙ → FX rates (or refresh online).`],
+  missingRate: r => {
+    const label = (RATE_PAIRS.find(p => p.key === r.missingRate) || {}).label || r.missingRate;
+    return ['warn', '↺', r.missingBridges === false
+      ? `<b>Need FX rates</b> to convert this pair into ${state.account.currency} — ${label} plus at least one more. Tap ⚙ → FX rates and refresh, or type them in.`
+      : `<b>Need the ${label} rate</b> to convert this pair into ${state.account.currency}. Tap ⚙ → FX rates (or refresh online).`];
+  },
   stopTooWide: w => ['warn', '⚠', `<b>Stop too wide.</b> Even 0.01 lots would risk ${fmtMoney(w.minLotRiskCash)}${w.minLotRiskPct ? ` (${fmtPct(w.minLotRiskPct)})` : ''} — over your safe limit. Tighten the stop or skip this trade.`],
   cap: (r) => ['warn', '⛨', `<b>Risk capped at ${fmtMoney(r.allowedRiskCash)}</b> (asked ${fmtMoney(r.requestedRiskCash)}) to keep your ${fmtPct(state.bufferPct)} buffer before the ${r.capReason === 'daily' ? 'daily-loss' : 'max-loss'} floor.`],
   marginCapped: (r) => ['warn', '◍', `<b>Lots capped by margin.</b> At 1:${r.leverage} leverage your equity supports ${r.lots.toFixed(2)} lots max (margin ${fmtMoney(r.marginRequired)}). Risk is ${fmtMoney(r.actualRiskCash)} — below your target.`],
-  noHeadroom: () => ['bad', '⛔', `<b>No risk room left.</b> Your remaining drawdown headroom is inside the ${fmtPct(state.bufferPct)} safety buffer. Sit out, or lower the buffer in settings if you accept less breathing space.`],
+  noHeadroom: w => ['bad', '⛔', w.openRisk > 0
+    ? `<b>No room for another trade.</b> ${fmtMoney(w.openRisk)} of your drawdown headroom is already committed to open trades — only ${fmtMoney(Math.max(0, w.allowedRiskCash))} is left and the smallest position (0.01 lots) would risk ${fmtMoney(w.minLotRiskCash)}. Close or resolve a position first.`
+    : `<b>No risk room left.</b> Only ${fmtMoney(Math.max(0, w.allowedRiskCash))} of headroom remains before your ${fmtPct(state.bufferPct)} buffer, and 0.01 lots would risk ${fmtMoney(w.minLotRiskCash)}. Sit out, or lower the buffer in settings if you accept less breathing space.`],
   tpWrongSide: () => ['warn', '⚠', `<b>Target is on the wrong side</b> for a ${state.lastDir || 'long'} — check entry / stop / target.`],
   highMargin: () => ['warn', '◍', `<b>Heavy margin use.</b> This position uses over half your equity as margin — a small adverse move could trigger a margin call.`],
 };
@@ -244,7 +314,7 @@ function render() {
   const sl = parseNum(vals.sl);
   const tp = parseNum(vals.tp);
 
-  const jrnl = computeJournal(state.journal.trades, state.account.initial, Date.now());
+  const jrnl = computeJournal(state.journal.trades, journalInitial(), Date.now());
   // journal drives the account only when its currency matches the account's
   const journalActive = state.tracking === 'journal'
     && (state.journal.currency == null || state.journal.currency === state.account.currency);
@@ -278,7 +348,7 @@ function render() {
     result = computePosition({
       symbol: sym, entry, sl, tp,
       riskPct: state.riskPct, account,
-      rates: { USDJPY: state.rates.USDJPY, GBPUSD: state.rates.GBPUSD },
+      rates: ratesSnapshot(),
       padPrice: state.pads[sym],
       commissionUSDPerLot: state.commissionUSDPerLot,
       bufferPct: state.bufferPct,
@@ -311,12 +381,17 @@ function render() {
     $('heroFine').textContent = '';
   };
 
+  // A breach outranks everything: it must stay on screen even when the inputs
+  // are incomplete or the account is too far gone to size a trade at all.
+  const breachBanner = guardOnly.breachedTotal ? 'breachedTotal' : guardOnly.breachedDaily ? 'breachedDaily' : null;
+
   if (incomplete) {
     setDim('Enter your entry and stop');
-    showBanner(guardOnly.breachedTotal ? 'breachedTotal' : guardOnly.breachedDaily ? 'breachedDaily' : null);
+    showBanner(breachBanner);
   } else if (!result.ok) {
-    if (result.error === 'sl-equals-entry') { setDim('Stop can’t equal entry'); showBanner(null); }
-    else if (result.error === 'missing-rate') { setDim('Missing FX rate'); showBanner('missingRate', result.missingRate); tryFetchRates(); }
+    if (breachBanner) { setDim('Account breached'); showBanner(breachBanner); }
+    else if (result.error === 'sl-equals-entry') { setDim('Stop can’t equal entry'); showBanner(null); }
+    else if (result.error === 'missing-rate') { setDim('Missing FX rate'); showBanner('missingRate', result); tryFetchRates(); }
     else { setDim('Check your numbers'); showBanner(null); }
   } else {
     const r = result;
@@ -335,13 +410,15 @@ function render() {
 
     $('riskCash').textContent = fmtMoney(r.actualRiskCash);
     $('riskSub').textContent = r.lots > 0
-      ? `${fmtPct(r.actualRiskPct)} of equity · ${w('commission-unconverted') ? 'excl. commission' : 'incl. costs'}`
+      ? `${fmtPct(r.actualRiskPct)} of equity · ${w('commission-estimated') ? 'commission est. 1:1' : 'incl. costs'}`
       : 'no position';
     if (tp != null && r.profitCash != null && r.tpValid) {
       $('rewardCash').textContent = fmtMoney(r.profitCash);
       // cash-based ratio so it always matches the two numbers on screen
-      const cashRR = r.actualRiskCash > 0 ? r.profitCash / r.actualRiskCash : r.rr;
-      $('rewardSub').textContent = `R:R 1 : ${cashRR.toFixed(2).replace(/\.?0+$/, '')}`;
+      const fmtRR = v => v.toFixed(2).replace(/\.?0+$/, '');
+      $('rewardSub').textContent = r.rrCash == null
+        ? `R:R 1 : ${fmtRR(r.rr)} before costs`
+        : `R:R 1 : ${fmtRR(r.rrCash)}`;
     } else {
       $('rewardCash').textContent = '—';
       $('rewardSub').textContent = tp == null ? 'add a target' : 'target on wrong side';
@@ -358,7 +435,7 @@ function render() {
     /* banner priority */
     if (w('breached-total')) showBanner('breachedTotal');
     else if (w('breached-daily')) showBanner('breachedDaily');
-    else if (w('no-headroom')) showBanner('noHeadroom');
+    else if (w('no-headroom')) showBanner('noHeadroom', w('no-headroom'));
     else if (w('stop-too-wide')) showBanner('stopTooWide', w('stop-too-wide'));
     else if (r.marginCapped) showBanner('marginCapped', r);
     else if (r.capReason) showBanner('cap', r);
@@ -403,12 +480,13 @@ function takeTrade() {
     lots: r.lots,
     riskCash: r.actualRiskCash,
     commissionCashPerLot: r.perLotCommission,
-    rates: { USDJPY: state.rates.USDJPY, GBPUSD: state.rates.GBPUSD },
+    rates: ratesSnapshot(),
     openedAt: Date.now(),
     status: 'open',
   });
   state.journal.currency = state.journal.currency ?? currency;
-  save();
+  state.journal.initial = state.journal.initial ?? state.account.initial;
+  save({ now: true });
   const btn = $('takeBtn');
   btn.classList.add('taken');
   btn.textContent = '✓ Logged to journal';
@@ -426,20 +504,20 @@ function resolveTrade(id, outcome, exitPrice = null) {
   if (outcome === 'closed') t.exitPrice = exitPrice;
   t.pnlCash = pnl;
   closingId = null;
-  save(); render();
+  save({ now: true }); render();
 }
 
 function deleteTrade(id) {
   state.journal.trades = state.journal.trades.filter(t => t.id !== id);
-  if (state.journal.trades.length === 0) state.journal.currency = null;
+  if (state.journal.trades.length === 0) { state.journal.currency = null; state.journal.initial = null; }
   confirmingDeleteId = null;
   closingId = null;
-  save(); render();
+  save({ now: true }); render();
 }
 
-const fmtWhen = ts => new Date(ts).toLocaleString('en-GB', {
-  weekday: 'short', hour: '2-digit', minute: '2-digit',
-});
+const fmtWhen = ts => (Number.isFinite(ts)
+  ? new Date(ts).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' })
+  : '—');
 
 function renderJournal(jrnl, journalActive) {
   const jCcy = state.journal.currency ?? state.account.currency;
@@ -465,9 +543,10 @@ function renderJournal(jrnl, journalActive) {
   const stepFill = $('jrnlStepFill');
   stepFill.style.width = `${jrnl.stepProgress * 100}%`;
   stepFill.className = 'meter-fill ' + (jrnl.realizedTotal < 0 ? 'warn' : 'ok');
+  const jInit = journalInitial();
   $('jrnlDays').textContent =
     `profitable days ${Math.min(jrnl.profitableDays, RULES.minProfitableDays)}/${RULES.minProfitableDays}` +
-    ` (≥ ${fmtJ(RULES.profitableDayPct * state.account.initial)}) · target ${fmtJ(RULES.targets.step1 * state.account.initial)}`;
+    ` (≥ ${fmtJ(RULES.profitableDayPct * jInit)}) · target ${fmtJ(RULES.targets.step1 * jInit)}`;
 
   const jb = $('jrnlBanner');
   if (jrnl.breaches.length) {
@@ -502,9 +581,10 @@ function renderJournal(jrnl, journalActive) {
       </li>`;
     }
     const cls = t.pnlCash > 0 ? 'pos' : 'neg';
-    const how = t.status === 'won' ? `target ${t.tp.toFixed(d)}`
-      : t.status === 'lost' ? `stopped ${t.sl.toFixed(d)}`
-      : `closed ${Number(t.exitPrice).toFixed(d)}`;
+    const px = v => (Number.isFinite(v) ? v.toFixed(d) : '—');
+    const how = t.status === 'won' ? `target ${px(t.tp)}`
+      : t.status === 'lost' ? `stopped ${px(t.sl)}`
+      : `closed ${px(t.exitPrice)}`;
     return `<li class="jrnl-row">
       <div class="jr-main">${head}<span class="jr-pnl ${cls}">${fmtJ(t.pnlCash, null, true)}</span></div>
       <div class="jr-sub">${how} · ${fmtWhen(t.closedAt)}<button class="jr-btn del" data-act="del" data-id="${t.id}" style="float:right;padding:2px 8px">${confirmingDeleteId === t.id ? 'Sure?' : '✕'}</button></div>
@@ -522,8 +602,22 @@ function bindJournal() {
     if (act === 'close') { closingId = id; confirmingDeleteId = null; render(); $(`close-in-${id}`)?.focus(); return; }
     if (act === 'close-cancel') { closingId = null; render(); return; }
     if (act === 'close-ok') {
-      const v = parseNum($(`close-in-${id}`)?.value ?? '');
-      if (v != null && v > 0) resolveTrade(id, 'closed', v);
+      const input = $(`close-in-${id}`);
+      const v = parseNum(input?.value ?? '');
+      const t = state.journal.trades.find(x => x.id === id);
+      // Reject anything that isn't a plausible price for this instrument
+      // instead of silently swallowing it.
+      const sane = v != null && v > 0 && t && v > t.entry / 5 && v < t.entry * 5;
+      if (!sane) {
+        if (input) {
+          input.style.borderColor = 'rgba(248,113,113,0.7)';
+          input.placeholder = 'price near ' + t?.entry;
+          input.value = '';
+          input.focus();
+        }
+        return;
+      }
+      resolveTrade(id, 'closed', v);
       return;
     }
     if (act === 'del') {
@@ -536,16 +630,29 @@ function bindJournal() {
 /* ---------------- FX rates ---------------- */
 
 const RATE_SOURCES = [
-  { url: 'https://api.frankfurter.dev/v1/latest?base=USD&symbols=JPY,GBP', pick: d => d.rates },
-  { url: 'https://api.frankfurter.app/latest?from=USD&to=JPY,GBP', pick: d => d.rates },
+  { url: 'https://api.frankfurter.dev/v1/latest?base=USD&symbols=JPY,GBP,EUR,CAD,AUD', pick: d => d.rates },
+  { url: 'https://api.frankfurter.app/latest?from=USD&to=JPY,GBP,EUR,CAD,AUD', pick: d => d.rates },
   { url: 'https://open.er-api.com/v6/latest/USD', pick: d => d.rates },
 ];
+
+/** USD-based quotes → the pair conventions the graph expects. */
+function ratesFromUSDBase(q) {
+  const inv = v => (Number.isFinite(v) && v > 0 ? 1 / v : null);
+  const dp = (v, n) => (Number.isFinite(v) && v > 0 ? Math.round(v * 10 ** n) / 10 ** n : null);
+  return {
+    USDJPY: dp(q.JPY, 3),
+    GBPUSD: dp(inv(q.GBP), 5),
+    EURUSD: dp(inv(q.EUR), 5),
+    USDCAD: dp(q.CAD, 5),
+    AUDUSD: dp(inv(q.AUD), 5),
+  };
+}
 
 let fetching = false;
 async function fetchRates(force = false) {
   if (fetching) return false;
   const age = state.rates.ts ? Date.now() - state.rates.ts : Infinity;
-  const have = state.rates.USDJPY && state.rates.GBPUSD;
+  const have = RATE_PAIRS.every(p => Number.isFinite(state.rates[p.key]) && state.rates[p.key] > 0);
   if (!force && have && age < 6 * 3600e3) return true;
   if (!force && have && state.rates.source === 'manual') return true; // never clobber manual rates silently
   if (!navigator.onLine) return false;
@@ -558,13 +665,11 @@ async function fetchRates(force = false) {
         const res = await fetch(src.url, { signal: ctrl.signal });
         clearTimeout(t);
         if (!res.ok) continue;
-        const rates = src.pick(await res.json());
-        if (!rates?.JPY || !rates?.GBP) continue;
-        state.rates = {
-          USDJPY: Math.round(rates.JPY * 1000) / 1000,
-          GBPUSD: Math.round((1 / rates.GBP) * 100000) / 100000,
-          ts: Date.now(), source: 'live',
-        };
+        const quotes = src.pick(await res.json());
+        if (!quotes) continue;
+        const mapped = ratesFromUSDBase(quotes);
+        if (RATE_PAIRS.some(p => mapped[p.key] == null)) continue;
+        state.rates = { ...mapped, ts: Date.now(), source: 'live' };
         save();
         syncRateFields();
         render();
@@ -582,17 +687,29 @@ function tryFetchRates() {
   fetchRates().finally(() => setTimeout(() => { fetchQueued = false; }, 30000));
 }
 
+function buildRateRows() {
+  const card = $('rateCard');
+  if (!card) return;
+  card.innerHTML = RATE_PAIRS.map(p => `
+    <div class="set-row">
+      <label>${p.label}</label>
+      <input type="text" inputmode="decimal" id="set-rate-${p.key}" aria-label="${p.key} rate">
+    </div>`).join('');
+}
+
 function syncRateFields() {
   const active = document.activeElement;
-  if (active !== $('set-usdjpy')) $('set-usdjpy').value = state.rates.USDJPY ?? '';
-  if (active !== $('set-gbpusd')) $('set-gbpusd').value = state.rates.GBPUSD ?? '';
+  for (const p of RATE_PAIRS) {
+    const el = $(`set-rate-${p.key}`);
+    if (el && active !== el) el.value = state.rates[p.key] ?? '';
+  }
   const note = $('rateNote');
   if (state.rates.ts) {
     const mins = Math.round((Date.now() - state.rates.ts) / 60000);
     const when = mins < 2 ? 'just now' : mins < 120 ? `${mins} min ago` : `${Math.round(mins / 60)} h ago`;
     note.textContent = state.rates.source === 'manual'
-      ? `Manual rates · set ${when}. GBPJPY/USDJPY convert at the trade's own prices — exact.`
-      : `Live reference rates · updated ${when}. GBPJPY/USDJPY convert at the trade's own prices — exact.`;
+      ? `Manual rates · set ${when}. Rates only convert into your account currency; a pair that prices its own cross uses the trade's own prices for that leg.`
+      : `Live reference rates · updated ${when}. Rates only convert into your account currency; a pair that prices its own cross uses the trade's own prices for that leg.`;
   } else {
     note.textContent = 'No rates yet — refresh online or type them in. Rates only convert JPY/USD amounts into your account currency; small deviations barely move the lot size.';
   }
@@ -602,7 +719,7 @@ function syncRateFields() {
 
 function syncTrackUI() {
   syncMiniSegByData('trackSeg', 'track', state.tracking);
-  const jrnl = computeJournal(state.journal.trades, state.account.initial, Date.now());
+  const jrnl = computeJournal(state.journal.trades, journalInitial(), Date.now());
   const active = state.tracking === 'journal'
     && (state.journal.currency == null || state.journal.currency === state.account.currency);
   const vals = [
@@ -614,6 +731,19 @@ function syncTrackUI() {
     input.closest('.set-row').classList.toggle('locked', active);
     if (document.activeElement !== input) input.value = String(Math.round(val * 100) / 100);
   }
+}
+
+/** Push current state into every settings control. */
+function syncSettingsFields() {
+  const set = (id, v) => { const el = $(id); if (el && document.activeElement !== el) el.value = String(v); };
+  set('set-initial', state.account.initial);
+  set('set-equity', state.account.equity);
+  set('set-daystart', state.account.dayStart);
+  set('set-comm', state.commissionUSDPerLot);
+  syncMiniSegByData('ccySeg', 'ccy', state.account.currency);
+  syncMiniSegByData('bufSeg', 'buf', String(state.bufferPct * 100));
+  syncTrackUI();
+  syncRateFields();
 }
 
 function openSheet() {
@@ -659,8 +789,11 @@ function bindSettings() {
   bindNum('set-daystart', v => { if (v != null && v > 0) state.account.dayStart = v; }, () => state.account.dayStart);
   bindNum('set-pad', v => { if (v != null && v >= 0) state.pads[state.symbol] = v; }, () => state.pads[state.symbol]);
   bindNum('set-comm', v => { if (v != null && v >= 0) state.commissionUSDPerLot = v; }, () => state.commissionUSDPerLot);
-  bindNum('set-usdjpy', v => { if (v != null && v > 0) { state.rates.USDJPY = v; state.rates.ts = Date.now(); state.rates.source = 'manual'; } }, () => state.rates.USDJPY);
-  bindNum('set-gbpusd', v => { if (v != null && v > 0) { state.rates.GBPUSD = v; state.rates.ts = Date.now(); state.rates.source = 'manual'; } }, () => state.rates.GBPUSD);
+  for (const p of RATE_PAIRS) {
+    bindNum(`set-rate-${p.key}`, v => {
+      if (v != null && v > 0) { state.rates[p.key] = v; state.rates.ts = Date.now(); state.rates.source = 'manual'; }
+    }, () => state.rates[p.key]);
+  }
 
   let resetArmed = false;
   $('resetAccount').addEventListener('click', e => {
@@ -674,6 +807,7 @@ function bindSettings() {
     e.target.textContent = 'Reset account & clear journal';
     state.journal.trades = [];
     state.journal.currency = null;
+    state.journal.initial = null;
     state.account.equity = state.account.initial;
     state.account.dayStart = state.account.initial;
     save(); syncTrackUI(); render();
@@ -700,15 +834,7 @@ function bindSettings() {
 
   $('rateRefresh').addEventListener('click', () => fetchRates(true));
 
-  /* initial values */
-  $('set-initial').value = String(state.account.initial);
-  $('set-equity').value = String(state.account.equity);
-  $('set-daystart').value = String(state.account.dayStart);
-  $('set-comm').value = String(state.commissionUSDPerLot);
-  syncMiniSegByData('ccySeg', 'ccy', state.account.currency);
-  syncMiniSegByData('bufSeg', 'buf', String(state.bufferPct * 100));
-  syncTrackUI();
-  syncRateFields();
+  syncSettingsFields();
 
   /* rules list */
   $('rulesList').innerHTML = [
@@ -825,9 +951,12 @@ function startStars() {
 
 /* ---------------- boot ---------------- */
 
+buildSymbolButtons();
+buildRateRows();
 bindTradeInputs();
 bindSettings();
 bindJournal();
+addEventListener('resize', () => movePuck(false));
 setRisk(state.riskPct * 100);
 setSymbol(state.symbol, false);
 startStars();

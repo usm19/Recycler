@@ -4,18 +4,19 @@ A zero-backend PWA that turns *entry / stop / target* into the exact lot size th
 fits your risk **and** always leaves breathing room before The5ers High Stakes
 Classic breach floors.
 
-**Symbols:** GBPJPY · XAUUSD (Gold) · USDJPY
+**Symbols:** XAUUSD (Gold) · GBPJPY · EURJPY · GBPUSD · USDJPY · USDCAD · AUDUSD
 **Stack:** plain HTML/CSS/JS, no build step, service-worker cached → instant loads, works offline.
 
 ## How the size is computed
 
 ```
 riskable   = min( yourRisk% × equity,
-                  equity − dailyFloor − buffer,
-                  equity − maxLossFloor − buffer )
-perLotLoss = stopDistance × contractSize × quote→account rate
-             + spread/slippage pad + commission
+                  equity − dailyFloor    − buffer − openTradeRisk,
+                  equity − maxLossFloor  − buffer − openTradeRisk )
+perLotLoss = (stopDistance + pad) × contractSize × quote→account rate at the STOP
+             + commission
 lots       = round_DOWN( riskable / perLotLoss , 0.01 )
+             capped so margin (notional ÷ leverage) ≤ 90% of equity
 ```
 
 - `dailyFloor` = 95% of the day-start value — The5ers' daily rule is 5% of the
@@ -30,11 +31,13 @@ lots       = round_DOWN( riskable / perLotLoss , 0.01 )
 - Lots are additionally capped so required margin stays under 90% of equity —
   gold runs at **1:25 leverage** (metals cut from 1:33 in March 2026), so margin
   genuinely binds on tight-stop gold trades; FX is 1:100.
-- JPY pairs convert via USD/JPY, gold is native USD. When you trade GBPJPY or
-  USDJPY the **trade's own prices** are the conversion rate — risk converts at
-  the stop, profit at the target — exact, no external data needed. Reference
-  rates for the rest are fetched free (Frankfurter/ECB → open.er-api.com
-  fallback), cached, and manually overridable.
+- Currency conversion walks a small graph: the **trade's own price** is an edge
+  (exact — risk converts at the stop, profit at the target), plus one edge per
+  reference rate (USD/JPY, GBP/USD, EUR/USD, USD/CAD, AUD/USD). Fewest hops
+  wins, so a pair that prices its own cross never needs external data — GBPUSD
+  on a GBP account, USDCAD's CAD leg, USDJPY's JPY leg. Reference rates are
+  fetched free (Frankfurter/ECB → open.er-api.com fallback), cached, and
+  manually overridable in settings.
 
 All The5ers rule numbers live in [`js/rules.js`](js/rules.js) — one file to edit
 if the firm ever changes its terms.
@@ -66,8 +69,14 @@ node --test tests/*.test.mjs    # unit tests for the sizing engine
 
 ## Deploy
 
-Pushing to `main` (or a `claude/**` branch) runs `.github/workflows/deploy.yml`:
-tests → GitHub Pages. The site is 100% static, so there is never a cold start.
+`.github/workflows/deploy.yml` runs the unit tests, then publishes the tree to
+the `gh-pages` branch with the service-worker cache version stamped from the
+commit SHA. It is served over a CDN mirror of that branch:
+
+    https://raw.githack.com/usm19/Recycler/gh-pages/index.html
+
+100% static, so there is never a cold start, and the service worker keeps a
+copy on-device for offline use.
 
 ## Rule sources (retrieved 2026-07-28)
 

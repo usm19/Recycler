@@ -18,7 +18,7 @@ jobs:
           curl -sSL --max-time 20 https://raw.githack.com/ | grep -io '<form[^>]*>' | head -5 || true
           curl -sSL --max-time 20 https://raw.githack.com/ | grep -io 'purge[^"<]*' | head -10 || true
           echo "== attempt purges"
-          for f in index.html styles.css js/app.js js/calc.js js/rules.js sw.js manifest.webmanifest; do
+          for f in index.html styles.css js/app.js js/calc.js js/rules.js js/journal.js sw.js manifest.webmanifest icons/icon-192.png icons/icon-512.png icons/icon-maskable-512.png icons/apple-touch-icon.png; do
             curl -sS -o /dev/null -w "PURGE $f -> %{http_code}\n" -X PURGE --max-time 20 "$base/$f" || true
           done
           curl -sS -o /dev/null -w "POST /purge -> %{http_code}\n" --max-time 20 -X POST --data-urlencode "url=$base/index.html" "https://raw.githack.com/purge" || true

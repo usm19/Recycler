@@ -1,5 +1,5 @@
 // Pure position-sizing engine. No DOM, no I/O — unit-tested in isolation.
-import { RULES, SYMBOLS, DEFAULTS } from './rules.js';
+import { RULES, SYMBOLS, DEFAULTS, RATE_PAIRS } from './rules.js';
 
 const EPS = 1e-9;
 
@@ -8,51 +8,77 @@ export function floorToStep(value, step) {
 }
 
 /**
- * Convert an amount between currencies using the trade's own price where it IS
- * the needed rate (exact), falling back to externally supplied rates.
- * ctx: { symbol, entry, rates: { USDJPY, GBPUSD } }
+ * Convert an amount between currencies.
+ *
+ * Builds a small graph of currency edges — the trade's OWN price (exact, no
+ * external data) plus whatever reference rates are available — and walks the
+ * shortest path. Fewest hops wins, so a trade that directly prices the pair
+ * (GBPJPY for GBP<->JPY, AUDUSD for AUD<->USD, ...) always beats a detour
+ * through reference rates.
+ *
+ * ctx: { symbol, entry, rates: { USDJPY, GBPUSD, EURUSD, USDCAD, AUDUSD } }
  * atPrice: which price of ctx.symbol to convert at — losses convert at the stop
- * price and profits at the target price (the rate that actually applies when
- * the position closes there); defaults to entry.
+ * and profits at the target (the rate that applies when the position closes
+ * there); defaults to entry.
  */
 export function conversionRate(from, to, ctx, atPrice = null) {
   if (from === to) return { rate: 1, source: 'none' };
 
   const fin = v => (Number.isFinite(v) && v > 0 ? v : null);
-  const { symbol, entry, rates } = ctx;
+  const { symbol, entry, rates } = ctx || {};
   const price = fin(atPrice) ?? fin(entry);
-  const usdjpy = symbol === 'USDJPY' && price ? price : fin(rates?.USDJPY);
-  const usdjpySrc = symbol === 'USDJPY' && price ? 'entry' : 'rates';
-  const gbpjpy = symbol === 'GBPJPY' && price ? price : null;
-  const gbpusd = fin(rates?.GBPUSD);
 
-  const pair = `${from}->${to}`;
-  switch (pair) {
-    case 'JPY->USD':
-      if (!usdjpy) return { rate: null, missing: 'USDJPY' };
-      return { rate: 1 / usdjpy, source: usdjpySrc };
-    case 'USD->JPY':
-      if (!usdjpy) return { rate: null, missing: 'USDJPY' };
-      return { rate: usdjpy, source: usdjpySrc };
-    case 'JPY->GBP': {
-      if (gbpjpy) return { rate: 1 / gbpjpy, source: 'entry' };
-      if (gbpusd && usdjpy) return { rate: 1 / (gbpusd * usdjpy), source: 'rates' };
-      return { rate: null, missing: !gbpusd ? 'GBPUSD' : 'USDJPY' };
+  const adj = new Map();
+  const addEdge = (a, b, mult, source) => {
+    if (!fin(mult)) return;
+    if (!adj.has(a)) adj.set(a, []);
+    if (!adj.has(b)) adj.set(b, []);
+    adj.get(a).push({ to: b, mult, source });
+    adj.get(b).push({ to: a, mult: 1 / mult, source });
+  };
+
+  // the trade's own price first, so it wins ties at equal hop count
+  const spec = SYMBOLS[symbol];
+  if (spec && price && spec.base !== 'XAU') addEdge(spec.base, spec.quote, price, 'entry');
+  for (const p of RATE_PAIRS) addEdge(p.base, p.quote, fin(rates?.[p.key]), 'rates');
+
+  // breadth-first: first arrival is the fewest-hop path
+  const seen = new Map([[from, { rate: 1, source: null }]]);
+  let frontier = [from];
+  while (frontier.length) {
+    const next = [];
+    for (const cur of frontier) {
+      const acc = seen.get(cur);
+      for (const e of adj.get(cur) || []) {
+        if (seen.has(e.to)) continue;
+        const source = acc.source == null || acc.source === e.source ? e.source : 'mixed';
+        const hop = { rate: acc.rate * e.mult, source };
+        seen.set(e.to, hop);
+        if (e.to === to) return { rate: hop.rate, source: hop.source };
+        next.push(e.to);
+      }
     }
-    case 'GBP->JPY': {
-      if (gbpjpy) return { rate: gbpjpy, source: 'entry' };
-      if (gbpusd && usdjpy) return { rate: gbpusd * usdjpy, source: 'rates' };
-      return { rate: null, missing: !gbpusd ? 'GBPUSD' : 'USDJPY' };
-    }
-    case 'USD->GBP':
-      if (!gbpusd) return { rate: null, missing: 'GBPUSD' };
-      return { rate: 1 / gbpusd, source: 'rates' };
-    case 'GBP->USD':
-      if (!gbpusd) return { rate: null, missing: 'GBPUSD' };
-      return { rate: gbpusd, source: 'rates' };
-    default:
-      return { rate: null, missing: pair };
+    frontier = next;
   }
+
+  // No path: name the reference rate that would help most — one that bridges
+  // the two halves outright, else one that extends either half toward the other.
+  const reach = start => {
+    const out = new Set([start]);
+    const queue = [start];
+    while (queue.length) {
+      for (const e of adj.get(queue.shift()) || []) {
+        if (!out.has(e.to)) { out.add(e.to); queue.push(e.to); }
+      }
+    }
+    return out;
+  };
+  const A = reach(from), B = reach(to);
+  const absent = RATE_PAIRS.filter(p => !fin(rates?.[p.key]));
+  const bridges = absent.find(p => (A.has(p.base) && B.has(p.quote)) || (A.has(p.quote) && B.has(p.base)));
+  const touches = absent.find(p => A.has(p.base) || A.has(p.quote) || B.has(p.base) || B.has(p.quote));
+  const pick = bridges || touches || absent[0];
+  return { rate: null, missing: pick ? pick.key : `${from}->${to}`, missingCount: absent.length, missingBridges: !!bridges };
 }
 
 /**
@@ -137,7 +163,12 @@ export function computePosition(input) {
   // Losses realize at the stop price, so convert the risk leg at the stop —
   // exact for the entry-derived crosses, and correct in both directions.
   const quoteToAcct = conversionRate(spec.quote, acctCcy, ctx, sl);
-  if (quoteToAcct.rate == null) { out.error = 'missing-rate'; out.missingRate = quoteToAcct.missing; return out; }
+  if (quoteToAcct.rate == null) {
+    out.error = 'missing-rate';
+    out.missingRate = quoteToAcct.missing;
+    out.missingBridges = quoteToAcct.missingBridges;
+    return out;
+  }
   const quoteToAcctNow = conversionRate(spec.quote, acctCcy, ctx);
   const usdToAcct = conversionRate('USD', acctCcy, ctx);
 
@@ -148,9 +179,13 @@ export function computePosition(input) {
   const commUSD = commissionUSDPerLot == null
     ? RULES.commissionUSDPerLot[spec.assetClass]
     : commissionUSDPerLot;
-  const perLotCommission = usdToAcct.rate == null ? 0 : commUSD * usdToAcct.rate;
+  // If USD can't be converted (GBP account with no GBP/USD rate), charge the
+  // commission at par rather than dropping it — 1.0 over-states the true cost
+  // while GBPUSD >= 1, so sizing stays conservative instead of drifting large.
+  const commRate = usdToAcct.rate == null ? 1 : usdToAcct.rate;
+  const perLotCommission = commUSD * commRate;
   if (usdToAcct.rate == null && commUSD > 0) {
-    warnings.push({ code: 'commission-unconverted', level: 'info' });
+    warnings.push({ code: 'commission-estimated', level: 'info' });
   }
   const perLotRiskTotal = perLotRisk + perLotPad + perLotCommission;
 
@@ -191,9 +226,20 @@ export function computePosition(input) {
   const minLotRiskCash = DEFAULTS.minLot * perLotRiskTotal;
   if (lots < DEFAULTS.minLot) {
     lots = 0;
-    if (guard.allowedRiskCash <= 0 && !guard.breachedDaily && !guard.breachedTotal) {
-      // Headroom exhausted (inside the buffer zone) — not the stop's fault.
-      warnings.push({ code: 'no-headroom', level: 'serious' });
+    // If even the full un-capped request couldn't cover 0.01 lots, the stop
+    // really is too wide; otherwise the allowance is what ran out.
+    const stopGenuinelyWide = minLotRiskCash > guard.requestedRiskCash;
+    const noRoom = !stopGenuinelyWide && !guard.breachedDaily && !guard.breachedTotal
+      && (guard.allowedRiskCash <= 0 || guard.capReason != null);
+    if (noRoom) {
+      // Headroom exhausted (buffer zone, or reserved by open trades) — the
+      // stop is fine, there is simply no allowance left to spend on it.
+      warnings.push({
+        code: 'no-headroom', level: 'serious',
+        allowedRiskCash: guard.allowedRiskCash,
+        minLotRiskCash,
+        openRisk: guard.openRisk,
+      });
     } else if (!marginCapped) {
       warnings.push({
         code: 'stop-too-wide', level: 'serious',
@@ -209,7 +255,7 @@ export function computePosition(input) {
   const postLossEquity = equity - actualRiskCash;
 
   // Take profit / reward
-  let profitCash = null, rr = null, tpValid = null;
+  let profitCash = null, rr = null, rrCash = null, tpValid = null;
   if (tp != null && Number.isFinite(tp) && tp > 0) {
     tpValid = direction === 'long' ? tp > entry : tp < entry;
     if (!tpValid) warnings.push({ code: 'tp-wrong-side', level: 'warning' });
@@ -218,7 +264,7 @@ export function computePosition(input) {
     const quoteToAcctTp = conversionRate(spec.quote, acctCcy, ctx, tp);
     const tpRate = quoteToAcctTp.rate ?? quoteToAcct.rate;
     profitCash = tpDistance * spec.contractSize * tpRate * lots - perLotCommission * lots;
-    rr = tpDistance / stopDistance;
+    rr = tpDistance / stopDistance;   // price distance only, before costs/FX legs
   }
 
   // Margin totals for the sized position
@@ -233,6 +279,9 @@ export function computePosition(input) {
 
   const pipValuePerLot = spec.pipSize * spec.contractSize * quoteToAcctNow.rate;
 
+  // Cash reward-per-unit-risk: what the two money figures on screen actually do.
+  rrCash = actualRiskCash > 0 && profitCash != null ? profitCash / actualRiskCash : null;
+
   Object.assign(out, {
     ok: true,
     direction, stopDistance, stopPips,
@@ -243,7 +292,7 @@ export function computePosition(input) {
     allowedRiskCash: guard.allowedRiskCash,
     capReason: guard.capReason,
     actualRiskCash, actualRiskStopOnly, actualRiskPct, postLossEquity,
-    profitCash, rr, tpValid,
+    profitCash, rr, rrCash, tpValid,
     marginRequired, marginPctOfEquity, marginPerLot, marginCapped, leverage,
     guard,
     conversion: { quoteToAcct, usdToAcct },

@@ -23,7 +23,7 @@ self.addEventListener('install', e => {
   // Cache assets individually — one missing file must not abort the install.
   e.waitUntil(
     caches.open(VERSION)
-      .then(c => Promise.allSettled(ASSETS.map(a => c.add(a))))
+      .then(c => Promise.allSettled(ASSETS.map(a => c.add(new Request(a, { cache: 'reload' })))))
       .then(() => self.skipWaiting())
   );
 });
@@ -43,7 +43,7 @@ self.addEventListener('fetch', e => {
     caches.open(VERSION).then(async cache => {
       let cached = await cache.match(e.request, { ignoreSearch: true });
       if (!cached && e.request.mode === 'navigate') cached = await cache.match('index.html');
-      const refresh = fetch(e.request)
+      const refresh = fetch(e.request, { cache: 'no-cache' })
         .then(res => {
           if (res && res.ok) cache.put(e.request, res.clone());
           return res;
