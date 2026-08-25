@@ -1,5 +1,5 @@
 // Pure position-sizing engine. No DOM, no I/O — unit-tested in isolation.
-import { RULES, SYMBOLS, DEFAULTS } from './rules.js';
+import { RULES, SYMBOLS, DEFAULTS, RATE_PAIRS } from './rules.js';
 
 const EPS = 1e-9;
 
@@ -8,51 +8,77 @@ export function floorToStep(value, step) {
 }
 
 /**
- * Convert an amount between currencies using the trade's own price where it IS
- * the needed rate (exact), falling back to externally supplied rates.
- * ctx: { symbol, entry, rates: { USDJPY, GBPUSD } }
+ * Convert an amount between currencies.
+ *
+ * Builds a small graph of currency edges — the trade's OWN price (exact, no
+ * external data) plus whatever reference rates are available — and walks the
+ * shortest path. Fewest hops wins, so a trade that directly prices the pair
+ * (GBPJPY for GBP<->JPY, AUDUSD for AUD<->USD, ...) always beats a detour
+ * through reference rates.
+ *
+ * ctx: { symbol, entry, rates: { USDJPY, GBPUSD, EURUSD, USDCAD, AUDUSD } }
  * atPrice: which price of ctx.symbol to convert at — losses convert at the stop
- * price and profits at the target price (the rate that actually applies when
- * the position closes there); defaults to entry.
+ * and profits at the target (the rate that applies when the position closes
+ * there); defaults to entry.
  */
 export function conversionRate(from, to, ctx, atPrice = null) {
   if (from === to) return { rate: 1, source: 'none' };
 
   const fin = v => (Number.isFinite(v) && v > 0 ? v : null);
-  const { symbol, entry, rates } = ctx;
+  const { symbol, entry, rates } = ctx || {};
   const price = fin(atPrice) ?? fin(entry);
-  const usdjpy = symbol === 'USDJPY' && price ? price : fin(rates?.USDJPY);
-  const usdjpySrc = symbol === 'USDJPY' && price ? 'entry' : 'rates';
-  const gbpjpy = symbol === 'GBPJPY' && price ? price : null;
-  const gbpusd = fin(rates?.GBPUSD);
 
-  const pair = `${from}->${to}`;
-  switch (pair) {
-    case 'JPY->USD':
-      if (!usdjpy) return { rate: null, missing: 'USDJPY' };
-      return { rate: 1 / usdjpy, source: usdjpySrc };
-    case 'USD->JPY':
-      if (!usdjpy) return { rate: null, missing: 'USDJPY' };
-      return { rate: usdjpy, source: usdjpySrc };
-    case 'JPY->GBP': {
-      if (gbpjpy) return { rate: 1 / gbpjpy, source: 'entry' };
-      if (gbpusd && usdjpy) return { rate: 1 / (gbpusd * usdjpy), source: 'rates' };
-      return { rate: null, missing: !gbpusd ? 'GBPUSD' : 'USDJPY' };
+  const adj = new Map();
+  const addEdge = (a, b, mult, source) => {
+    if (!fin(mult)) return;
+    if (!adj.has(a)) adj.set(a, []);
+    if (!adj.has(b)) adj.set(b, []);
+    adj.get(a).push({ to: b, mult, source });
+    adj.get(b).push({ to: a, mult: 1 / mult, source });
+  };
+
+  // the trade's own price first, so it wins ties at equal hop count
+  const spec = SYMBOLS[symbol];
+  if (spec && price && spec.base !== 'XAU') addEdge(spec.base, spec.quote, price, 'entry');
+  for (const p of RATE_PAIRS) addEdge(p.base, p.quote, fin(rates?.[p.key]), 'rates');
+
+  // breadth-first: first arrival is the fewest-hop path
+  const seen = new Map([[from, { rate: 1, source: null }]]);
+  let frontier = [from];
+  while (frontier.length) {
+    const next = [];
+    for (const cur of frontier) {
+      const acc = seen.get(cur);
+      for (const e of adj.get(cur) || []) {
+        if (seen.has(e.to)) continue;
+        const source = acc.source == null || acc.source === e.source ? e.source : 'mixed';
+        const hop = { rate: acc.rate * e.mult, source };
+        seen.set(e.to, hop);
+        if (e.to === to) return { rate: hop.rate, source: hop.source };
+        next.push(e.to);
+      }
     }
-    case 'GBP->JPY': {
-      if (gbpjpy) return { rate: gbpjpy, source: 'entry' };
-      if (gbpusd && usdjpy) return { rate: gbpusd * usdjpy, source: 'rates' };
-      return { rate: null, missing: !gbpusd ? 'GBPUSD' : 'USDJPY' };
-    }
-    case 'USD->GBP':
-      if (!gbpusd) return { rate: null, missing: 'GBPUSD' };
-      return { rate: 1 / gbpusd, source: 'rates' };
-    case 'GBP->USD':
-      if (!gbpusd) return { rate: null, missing: 'GBPUSD' };
-      return { rate: gbpusd, source: 'rates' };
-    default:
-      return { rate: null, missing: pair };
+    frontier = next;
   }
+
+  // No path: name the reference rate that would help most — one that bridges
+  // the two halves outright, else one that extends either half toward the other.
+  const reach = start => {
+    const out = new Set([start]);
+    const queue = [start];
+    while (queue.length) {
+      for (const e of adj.get(queue.shift()) || []) {
+        if (!out.has(e.to)) { out.add(e.to); queue.push(e.to); }
+      }
+    }
+    return out;
+  };
+  const A = reach(from), B = reach(to);
+  const absent = RATE_PAIRS.filter(p => !fin(rates?.[p.key]));
+  const bridges = absent.find(p => (A.has(p.base) && B.has(p.quote)) || (A.has(p.quote) && B.has(p.base)));
+  const touches = absent.find(p => A.has(p.base) || A.has(p.quote) || B.has(p.base) || B.has(p.quote));
+  const pick = bridges || touches || absent[0];
+  return { rate: null, missing: pick ? pick.key : `${from}->${to}`, missingCount: absent.length };
 }
 
 /**

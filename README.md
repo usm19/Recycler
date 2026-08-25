@@ -4,7 +4,7 @@ A zero-backend PWA that turns *entry / stop / target* into the exact lot size th
 fits your risk **and** always leaves breathing room before The5ers High Stakes
 Classic breach floors.
 
-**Symbols:** GBPJPY · XAUUSD (Gold) · USDJPY
+**Symbols:** XAUUSD (Gold) · GBPJPY · EURJPY · GBPUSD · USDJPY · USDCAD · AUDUSD
 **Stack:** plain HTML/CSS/JS, no build step, service-worker cached → instant loads, works offline.
 
 ## How the size is computed
@@ -30,11 +30,13 @@ lots       = round_DOWN( riskable / perLotLoss , 0.01 )
 - Lots are additionally capped so required margin stays under 90% of equity —
   gold runs at **1:25 leverage** (metals cut from 1:33 in March 2026), so margin
   genuinely binds on tight-stop gold trades; FX is 1:100.
-- JPY pairs convert via USD/JPY, gold is native USD. When you trade GBPJPY or
-  USDJPY the **trade's own prices** are the conversion rate — risk converts at
-  the stop, profit at the target — exact, no external data needed. Reference
-  rates for the rest are fetched free (Frankfurter/ECB → open.er-api.com
-  fallback), cached, and manually overridable.
+- Currency conversion walks a small graph: the **trade's own price** is an edge
+  (exact — risk converts at the stop, profit at the target), plus one edge per
+  reference rate (USD/JPY, GBP/USD, EUR/USD, USD/CAD, AUD/USD). Fewest hops
+  wins, so a pair that prices its own cross never needs external data — GBPUSD
+  on a GBP account, USDCAD's CAD leg, USDJPY's JPY leg. Reference rates are
+  fetched free (Frankfurter/ECB → open.er-api.com fallback), cached, and
+  manually overridable in settings.
 
 All The5ers rule numbers live in [`js/rules.js`](js/rules.js) — one file to edit
 if the firm ever changes its terms.

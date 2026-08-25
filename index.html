@@ -54,9 +54,6 @@
 
   <nav class="seg" id="symbolSeg" aria-label="Symbol">
     <div class="seg-puck" id="segPuck"></div>
-    <button data-symbol="GBPJPY" class="on">GBPJPY</button>
-    <button data-symbol="XAUUSD">GOLD</button>
-    <button data-symbol="USDJPY">USDJPY</button>
   </nav>
 
   <section class="card inputs">
@@ -80,14 +77,13 @@
 
   <section class="risk-row" aria-label="Risk percent">
     <div class="risk-chips" id="riskChips">
+      <button class="chip" data-risk="1">1%</button>
+      <button class="chip on" data-risk="1.5">1.5%</button>
       <button class="chip" data-risk="2">2%</button>
-      <button class="chip" data-risk="2.5">2.5%</button>
-      <button class="chip on" data-risk="3">3%</button>
-      <button class="chip" data-risk="4">4%</button>
     </div>
     <div class="risk-slider-wrap">
-      <input type="range" id="riskSlider" min="0.25" max="4" step="0.25" value="3" aria-label="Fine-tune risk percent">
-      <output id="riskOut">3.00%</output>
+      <input type="range" id="riskSlider" min="0.25" max="2" step="0.25" value="1.5" aria-label="Fine-tune risk percent">
+      <output id="riskOut">1.5%</output>
     </div>
   </section>
 
@@ -230,16 +226,7 @@
   </div>
 
   <h3>FX RATES</h3>
-  <div class="set-card">
-    <div class="set-row">
-      <label>USD/JPY</label>
-      <input type="text" inputmode="decimal" id="set-usdjpy" aria-label="USDJPY rate">
-    </div>
-    <div class="set-row">
-      <label>GBP/USD</label>
-      <input type="text" inputmode="decimal" id="set-gbpusd" aria-label="GBPUSD rate">
-    </div>
-  </div>
+  <div class="set-card" id="rateCard"></div>
   <div class="set-note" id="rateNote"></div>
   <button class="text-btn" id="rateRefresh">↻ Refresh rates</button>
 

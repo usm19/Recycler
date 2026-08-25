@@ -49,44 +49,68 @@ export const RULES = {
   newsRule: 'No open/close ±2 min around high-impact news (holding through is fine)',
 };
 
+// Display order matches the trader's TradingView watchlist.
+// pipSize/priceDecimals follow the broker quote convention; defaultPadPrice is a
+// spread+slippage cushion in price units, added to every stop when sizing.
 export const SYMBOLS = {
-  GBPJPY: {
-    label: 'GBP/JPY',
-    contractSize: 100000,
-    quote: 'JPY',
-    base: 'GBP',
-    assetClass: 'fx',
-    pipSize: 0.01,
-    priceDecimals: 3,
-    // Combined spread+slippage pad applied to the stop, in price units (editable in settings).
-    defaultPadPrice: 0.03,
-  },
   XAUUSD: {
-    label: 'GOLD',
-    contractSize: 100,
-    quote: 'USD',
-    base: 'XAU',
-    assetClass: 'metals',
-    pipSize: 0.1,
-    priceDecimals: 2,
+    label: 'GOLD', short: 'GOLD',
+    contractSize: 100, base: 'XAU', quote: 'USD',
+    assetClass: 'metals', pipSize: 0.1, priceDecimals: 2,
     defaultPadPrice: 0.5,
   },
+  GBPJPY: {
+    label: 'GBP/JPY', short: 'GBPJPY',
+    contractSize: 100000, base: 'GBP', quote: 'JPY',
+    assetClass: 'fx', pipSize: 0.01, priceDecimals: 3,
+    defaultPadPrice: 0.03,
+  },
+  EURJPY: {
+    label: 'EUR/JPY', short: 'EURJPY',
+    contractSize: 100000, base: 'EUR', quote: 'JPY',
+    assetClass: 'fx', pipSize: 0.01, priceDecimals: 3,
+    defaultPadPrice: 0.02,
+  },
+  GBPUSD: {
+    label: 'GBP/USD', short: 'GBPUSD',
+    contractSize: 100000, base: 'GBP', quote: 'USD',
+    assetClass: 'fx', pipSize: 0.0001, priceDecimals: 5,
+    defaultPadPrice: 0.0002,
+  },
   USDJPY: {
-    label: 'USD/JPY',
-    contractSize: 100000,
-    quote: 'JPY',
-    base: 'USD',
-    assetClass: 'fx',
-    pipSize: 0.01,
-    priceDecimals: 3,
+    label: 'USD/JPY', short: 'USDJPY',
+    contractSize: 100000, base: 'USD', quote: 'JPY',
+    assetClass: 'fx', pipSize: 0.01, priceDecimals: 3,
     defaultPadPrice: 0.015,
   },
+  USDCAD: {
+    label: 'USD/CAD', short: 'USDCAD',
+    contractSize: 100000, base: 'USD', quote: 'CAD',
+    assetClass: 'fx', pipSize: 0.0001, priceDecimals: 5,
+    defaultPadPrice: 0.0002,
+  },
+  AUDUSD: {
+    label: 'AUD/USD', short: 'AUDUSD',
+    contractSize: 100000, base: 'AUD', quote: 'USD',
+    assetClass: 'fx', pipSize: 0.0001, priceDecimals: 5,
+    defaultPadPrice: 0.0002,
+  },
 };
+
+// Reference FX pairs used to convert between currencies the trade itself
+// doesn't price. Each is an edge base->quote in the conversion graph.
+export const RATE_PAIRS = [
+  { key: 'USDJPY', base: 'USD', quote: 'JPY', label: 'USD/JPY' },
+  { key: 'GBPUSD', base: 'GBP', quote: 'USD', label: 'GBP/USD' },
+  { key: 'EURUSD', base: 'EUR', quote: 'USD', label: 'EUR/USD' },
+  { key: 'USDCAD', base: 'USD', quote: 'CAD', label: 'USD/CAD' },
+  { key: 'AUDUSD', base: 'AUD', quote: 'USD', label: 'AUD/USD' },
+];
 
 export const DEFAULTS = {
   accountSize: 10000,
   accountCurrency: 'GBP',      // user's stated £10k; switchable to USD in settings
-  riskPct: 0.03,
+  riskPct: 0.015,
   // Safety buffer kept between the worst-case post-loss equity and any breach floor,
   // as a fraction of initial account size.
   bufferPct: 0.01,

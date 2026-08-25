@@ -1,5 +1,5 @@
 import { computePosition, computeGuardrails } from './calc.js';
-import { RULES, SYMBOLS, DEFAULTS } from './rules.js';
+import { RULES, SYMBOLS, DEFAULTS, RATE_PAIRS } from './rules.js';
 import { computeJournal, resolvePnl } from './journal.js';
 
 /* ---------------- state ---------------- */
@@ -8,11 +8,7 @@ const STORE_KEY = 'nebula-v1';
 
 const defaultState = () => ({
   symbol: 'GBPJPY',
-  inputs: {
-    GBPJPY: { entry: '', sl: '', tp: '' },
-    XAUUSD: { entry: '', sl: '', tp: '' },
-    USDJPY: { entry: '', sl: '', tp: '' },
-  },
+  inputs: Object.fromEntries(Object.keys(SYMBOLS).map(k => [k, { entry: '', sl: '', tp: '' }])),
   riskPct: DEFAULTS.riskPct,
   account: {
     initial: DEFAULTS.accountSize,
@@ -24,7 +20,7 @@ const defaultState = () => ({
   bufferPct: DEFAULTS.bufferPct,
   pads: Object.fromEntries(Object.entries(SYMBOLS).map(([k, v]) => [k, v.defaultPadPrice])),
   commissionUSDPerLot: RULES.commissionUSDPerLot.fx,
-  rates: { USDJPY: null, GBPUSD: null, ts: null, source: null },
+  rates: { ...Object.fromEntries(RATE_PAIRS.map(p => [p.key, null])), ts: null, source: null },
   tracking: 'journal',                       // 'journal' | 'manual'
   journal: { currency: null, trades: [] },
 });
@@ -62,13 +58,13 @@ function loadState() {
     delete s.account.todayPnl;
     if (s.account.currency !== 'GBP' && s.account.currency !== 'USD') s.account.currency = base.account.currency;
     // clamp to the UI's actual ranges; anything outside falls back to defaults
-    s.riskPct = Math.min(0.04, Math.max(0.0025, num(s.riskPct, base.riskPct)));
+    s.riskPct = Math.min(0.02, Math.max(0.0025, num(s.riskPct, base.riskPct)));
     s.bufferPct = Number.isFinite(s.bufferPct) && s.bufferPct >= 0 && s.bufferPct <= 0.03
       ? s.bufferPct : base.bufferPct;
     s.commissionUSDPerLot = Number.isFinite(s.commissionUSDPerLot) && s.commissionUSDPerLot >= 0
       ? s.commissionUSDPerLot : base.commissionUSDPerLot;
-    for (const r of ['USDJPY', 'GBPUSD']) {
-      if (!(Number.isFinite(s.rates[r]) && s.rates[r] > 0)) s.rates[r] = null;
+    for (const p of RATE_PAIRS) {
+      if (!(Number.isFinite(s.rates[p.key]) && s.rates[p.key] > 0)) s.rates[p.key] = null;
     }
     // journal: keep only well-formed trades
     if (s.tracking !== 'journal' && s.tracking !== 'manual') s.tracking = base.tracking;
@@ -149,22 +145,47 @@ function tween(el, target, format, dur = 340) {
 
 /* ---------------- symbol control ---------------- */
 
-const SYMBOL_ORDER = ['GBPJPY', 'XAUUSD', 'USDJPY'];
+const SYMBOL_ORDER = Object.keys(SYMBOLS);
+// Sensible starting prices near current market, so the fields hint the format.
 const PLACEHOLDERS = {
-  GBPJPY: { entry: '195.500', sl: '195.000', tp: '196.500' },
-  XAUUSD: { entry: '3350.00', sl: '3340.00', tp: '3370.00' },
-  USDJPY: { entry: '148.500', sl: '148.000', tp: '149.500' },
+  XAUUSD: { entry: '4625.00', sl: '4610.00', tp: '4655.00' },
+  GBPJPY: { entry: '217.180', sl: '216.780', tp: '217.980' },
+  EURJPY: { entry: '185.770', sl: '185.470', tp: '186.370' },
+  GBPUSD: { entry: '1.36450', sl: '1.36150', tp: '1.37050' },
+  USDJPY: { entry: '159.160', sl: '158.860', tp: '159.760' },
+  USDCAD: { entry: '1.38470', sl: '1.38170', tp: '1.39070' },
+  AUDUSD: { entry: '0.71590', sl: '0.71290', tp: '0.72190' },
 };
+
+/** Build the symbol buttons from the symbol table. */
+function buildSymbolButtons() {
+  const seg = $('symbolSeg');
+  for (const key of SYMBOL_ORDER) {
+    const b = document.createElement('button');
+    b.dataset.symbol = key;
+    b.textContent = SYMBOLS[key].short;
+    b.setAttribute('aria-label', SYMBOLS[key].label);
+    seg.appendChild(b);
+  }
+}
+
+/** Park the puck over the active button — works for any wrapped layout. */
+function movePuck(animate = true) {
+  const btn = $('symbolSeg').querySelector(`button[data-symbol="${state.symbol}"]`);
+  const puck = $('segPuck');
+  if (!btn) return;
+  if (!animate) puck.style.transition = 'none';
+  puck.style.width = `${btn.offsetWidth}px`;
+  puck.style.height = `${btn.offsetHeight}px`;
+  puck.style.transform = `translate(${btn.offsetLeft}px, ${btn.offsetTop - 4}px)`;
+  if (!animate) requestAnimationFrame(() => { puck.style.transition = ''; });
+}
 
 function setSymbol(sym, animate = true) {
   state.symbol = sym;
-  const idx = SYMBOL_ORDER.indexOf(sym);
-  const puck = $('segPuck');
-  if (!animate) puck.style.transition = 'none';
-  puck.style.transform = `translateX(${idx * 100}%)`;
-  if (!animate) requestAnimationFrame(() => { puck.style.transition = ''; });
   document.querySelectorAll('#symbolSeg button').forEach(b =>
     b.classList.toggle('on', b.dataset.symbol === sym));
+  movePuck(animate);
   const ph = PLACEHOLDERS[sym];
   const vals = state.inputs[sym];
   for (const k of ['entry', 'sl', 'tp']) {
@@ -196,7 +217,7 @@ function setRisk(pct, { fromSlider = false } = {}) {
 const BANNERS = {
   breachedTotal: () => ['bad', '✕', `<b>Max-loss breached.</b> Equity is at or below the ${fmtPct(RULES.maxLossPct)} overall floor. Do not trade — check your dashboard.`],
   breachedDaily: () => ['bad', '✕', `<b>Daily limit breached.</b> Equity is at or below today's ${fmtPct(RULES.dailyLossPct)} floor — on High Stakes this terminates the account. Check your dashboard before doing anything.`],
-  missingRate: m => ['warn', '↺', `<b>Need the ${m === 'GBPUSD' ? 'GBP/USD' : 'USD/JPY'} rate</b> to convert this pair. Tap ⚙ → FX rates (or refresh online).`],
+  missingRate: m => ['warn', '↺', `<b>Need the ${(RATE_PAIRS.find(p => p.key === m) || {}).label || m} rate</b> to convert this pair into ${state.account.currency}. Tap ⚙ → FX rates (or refresh online).`],
   stopTooWide: w => ['warn', '⚠', `<b>Stop too wide.</b> Even 0.01 lots would risk ${fmtMoney(w.minLotRiskCash)}${w.minLotRiskPct ? ` (${fmtPct(w.minLotRiskPct)})` : ''} — over your safe limit. Tighten the stop or skip this trade.`],
   cap: (r) => ['warn', '⛨', `<b>Risk capped at ${fmtMoney(r.allowedRiskCash)}</b> (asked ${fmtMoney(r.requestedRiskCash)}) to keep your ${fmtPct(state.bufferPct)} buffer before the ${r.capReason === 'daily' ? 'daily-loss' : 'max-loss'} floor.`],
   marginCapped: (r) => ['warn', '◍', `<b>Lots capped by margin.</b> At 1:${r.leverage} leverage your equity supports ${r.lots.toFixed(2)} lots max (margin ${fmtMoney(r.marginRequired)}). Risk is ${fmtMoney(r.actualRiskCash)} — below your target.`],
@@ -536,10 +557,23 @@ function bindJournal() {
 /* ---------------- FX rates ---------------- */
 
 const RATE_SOURCES = [
-  { url: 'https://api.frankfurter.dev/v1/latest?base=USD&symbols=JPY,GBP', pick: d => d.rates },
-  { url: 'https://api.frankfurter.app/latest?from=USD&to=JPY,GBP', pick: d => d.rates },
+  { url: 'https://api.frankfurter.dev/v1/latest?base=USD&symbols=JPY,GBP,EUR,CAD,AUD', pick: d => d.rates },
+  { url: 'https://api.frankfurter.app/latest?from=USD&to=JPY,GBP,EUR,CAD,AUD', pick: d => d.rates },
   { url: 'https://open.er-api.com/v6/latest/USD', pick: d => d.rates },
 ];
+
+/** USD-based quotes → the pair conventions the graph expects. */
+function ratesFromUSDBase(q) {
+  const inv = v => (Number.isFinite(v) && v > 0 ? 1 / v : null);
+  const dp = (v, n) => (Number.isFinite(v) && v > 0 ? Math.round(v * 10 ** n) / 10 ** n : null);
+  return {
+    USDJPY: dp(q.JPY, 3),
+    GBPUSD: dp(inv(q.GBP), 5),
+    EURUSD: dp(inv(q.EUR), 5),
+    USDCAD: dp(q.CAD, 5),
+    AUDUSD: dp(inv(q.AUD), 5),
+  };
+}
 
 let fetching = false;
 async function fetchRates(force = false) {
@@ -558,13 +592,11 @@ async function fetchRates(force = false) {
         const res = await fetch(src.url, { signal: ctrl.signal });
         clearTimeout(t);
         if (!res.ok) continue;
-        const rates = src.pick(await res.json());
-        if (!rates?.JPY || !rates?.GBP) continue;
-        state.rates = {
-          USDJPY: Math.round(rates.JPY * 1000) / 1000,
-          GBPUSD: Math.round((1 / rates.GBP) * 100000) / 100000,
-          ts: Date.now(), source: 'live',
-        };
+        const quotes = src.pick(await res.json());
+        if (!quotes) continue;
+        const mapped = ratesFromUSDBase(quotes);
+        if (RATE_PAIRS.some(p => mapped[p.key] == null)) continue;
+        state.rates = { ...mapped, ts: Date.now(), source: 'live' };
         save();
         syncRateFields();
         render();
@@ -582,17 +614,27 @@ function tryFetchRates() {
   fetchRates().finally(() => setTimeout(() => { fetchQueued = false; }, 30000));
 }
 
+function buildRateRows() {
+  $('rateCard').innerHTML = RATE_PAIRS.map(p => `
+    <div class="set-row">
+      <label>${p.label}</label>
+      <input type="text" inputmode="decimal" id="set-rate-${p.key}" aria-label="${p.key} rate">
+    </div>`).join('');
+}
+
 function syncRateFields() {
   const active = document.activeElement;
-  if (active !== $('set-usdjpy')) $('set-usdjpy').value = state.rates.USDJPY ?? '';
-  if (active !== $('set-gbpusd')) $('set-gbpusd').value = state.rates.GBPUSD ?? '';
+  for (const p of RATE_PAIRS) {
+    const el = $(`set-rate-${p.key}`);
+    if (el && active !== el) el.value = state.rates[p.key] ?? '';
+  }
   const note = $('rateNote');
   if (state.rates.ts) {
     const mins = Math.round((Date.now() - state.rates.ts) / 60000);
     const when = mins < 2 ? 'just now' : mins < 120 ? `${mins} min ago` : `${Math.round(mins / 60)} h ago`;
     note.textContent = state.rates.source === 'manual'
-      ? `Manual rates · set ${when}. GBPJPY/USDJPY convert at the trade's own prices — exact.`
-      : `Live reference rates · updated ${when}. GBPJPY/USDJPY convert at the trade's own prices — exact.`;
+      ? `Manual rates · set ${when}. A pair that prices its own cross (GBPJPY, GBPUSD, USDJPY, USDCAD, AUDUSD) converts at the trade's own prices — exact.`
+      : `Live reference rates · updated ${when}. A pair that prices its own cross (GBPJPY, GBPUSD, USDJPY, USDCAD, AUDUSD) converts at the trade's own prices — exact.`;
   } else {
     note.textContent = 'No rates yet — refresh online or type them in. Rates only convert JPY/USD amounts into your account currency; small deviations barely move the lot size.';
   }
@@ -659,8 +701,11 @@ function bindSettings() {
   bindNum('set-daystart', v => { if (v != null && v > 0) state.account.dayStart = v; }, () => state.account.dayStart);
   bindNum('set-pad', v => { if (v != null && v >= 0) state.pads[state.symbol] = v; }, () => state.pads[state.symbol]);
   bindNum('set-comm', v => { if (v != null && v >= 0) state.commissionUSDPerLot = v; }, () => state.commissionUSDPerLot);
-  bindNum('set-usdjpy', v => { if (v != null && v > 0) { state.rates.USDJPY = v; state.rates.ts = Date.now(); state.rates.source = 'manual'; } }, () => state.rates.USDJPY);
-  bindNum('set-gbpusd', v => { if (v != null && v > 0) { state.rates.GBPUSD = v; state.rates.ts = Date.now(); state.rates.source = 'manual'; } }, () => state.rates.GBPUSD);
+  for (const p of RATE_PAIRS) {
+    bindNum(`set-rate-${p.key}`, v => {
+      if (v != null && v > 0) { state.rates[p.key] = v; state.rates.ts = Date.now(); state.rates.source = 'manual'; }
+    }, () => state.rates[p.key]);
+  }
 
   let resetArmed = false;
   $('resetAccount').addEventListener('click', e => {
@@ -825,9 +870,12 @@ function startStars() {
 
 /* ---------------- boot ---------------- */
 
+buildSymbolButtons();
+buildRateRows();
 bindTradeInputs();
 bindSettings();
 bindJournal();
+addEventListener('resize', () => movePuck(false));
 setRisk(state.riskPct * 100);
 setSymbol(state.symbol, false);
 startStars();

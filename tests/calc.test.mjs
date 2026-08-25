@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { computePosition, computeGuardrails, conversionRate, floorToStep } from '../js/calc.js';
+import { SYMBOLS } from '../js/rules.js';
 
 const closeTo = (a, b, tol = 1e-6) =>
   assert.ok(Math.abs(a - b) <= tol, `expected ${a} ≈ ${b} (±${tol})`);
@@ -235,13 +236,26 @@ test('non-finite inputs are rejected, never NaN/Infinity outputs', () => {
   const nan = computePosition({ symbol: 'USDJPY', entry: 148.5, sl: NaN, riskPct: 0.02, account: freshUSD, rates: {} });
   assert.equal(nan.error, 'need-sl');
 
-  // Infinity supplied as an external rate must read as "missing", not rate 0
+  // Infinity as an external rate must be ignored, never treated as rate 0.
+  // The graph still routes JPY->GBP (trade entry) ->USD (GBPUSD), so this is
+  // a valid sizing — the point is that no NaN/Infinity reaches the output.
   const r = computePosition({
     symbol: 'GBPJPY', entry: 192, sl: 191, riskPct: 0.02,
     account: freshUSD, rates: { USDJPY: Infinity, GBPUSD: 1.27 },
   });
-  assert.equal(r.ok, false);
-  assert.equal(r.error, 'missing-rate');
+  assert.equal(r.ok, true);
+  closeTo(r.perLotRisk, 1 * 100000 / 191 * 1.27, 1e-9);
+  for (const v of [r.lots, r.actualRiskCash, r.postLossEquity, r.marginRequired]) {
+    assert.ok(Number.isFinite(v), `expected finite, got ${v}`);
+  }
+
+  // genuinely unreachable: EURJPY on a GBP account with no reference rates
+  const noPath = computePosition({
+    symbol: 'EURJPY', entry: 185.77, sl: 185.47, riskPct: 0.02,
+    account: freshGBP, rates: {},
+  });
+  assert.equal(noPath.ok, false);
+  assert.equal(noPath.error, 'missing-rate');
 
   const tpInf = computePosition({ symbol: 'XAUUSD', entry: 3350, sl: 3340, tp: Infinity, riskPct: 0.02, account: freshUSD, rates: {} });
   assert.equal(tpInf.ok, true);
@@ -269,6 +283,75 @@ test('rounding down means actual risk never exceeds allowed risk (sweep)', () =>
         `pips=${pips} risk=${riskPct}: ${r.actualRiskCash} > ${r.allowedRiskCash}`);
       assert.ok(r.postLossEquity >= r.guard.dailyFloor - 1e-9, 'stays above daily floor');
       assert.ok(r.postLossEquity >= r.guard.totalFloor - 1e-9, 'stays above total floor');
+    }
+  }
+});
+
+/* ---- the seven watchlist pairs ---- */
+
+const WATCHLIST_RATES = { USDJPY: 159.165, GBPUSD: 1.36457, EURUSD: 1.16716, USDCAD: 1.38471, AUDUSD: 0.71598 };
+
+test('all seven pairs size correctly on a £10k account at 1.5%', () => {
+  // expected lots hand-computed from the spec, independent of the engine
+  const cases = [
+    ['XAUUSD', 4625.00, 4610.00, 4655.00, 0.13, 1138.82],
+    ['GBPJPY', 217.180, 216.780, 217.980, 0.74, 201.29],
+    ['EURJPY', 185.770, 185.470, 186.370, 0.99, 150.27],
+    ['GBPUSD', 1.36450, 1.36150, 1.37050, 0.63, 237.97],
+    ['USDJPY', 159.160, 158.860, 159.760, 1.01, 148.24],
+    ['USDCAD', 1.38470, 1.38170, 1.39070, 0.86, 172.65],
+    ['AUDUSD', 0.71590, 0.71290, 0.72190, 0.63, 237.44],
+  ];
+  for (const [symbol, entry, sl, tp, lots, perLot] of cases) {
+    const r = computePosition({
+      symbol, entry, sl, tp, riskPct: 0.015, account: freshGBP, rates: WATCHLIST_RATES,
+    });
+    assert.equal(r.ok, true, `${symbol} should size`);
+    closeTo(r.perLotRiskTotal, perLot, 0.01);
+    assert.equal(r.lots, lots, `${symbol} lots`);
+    assert.ok(r.actualRiskCash <= 150 + 1e-9, `${symbol} risk within allowance`);
+    assert.ok(r.marginRequired <= 9000 + 1e-9, `${symbol} margin within cap`);
+    assert.equal(r.direction, 'long');
+    assert.ok(r.profitCash > 0, `${symbol} profit positive`);
+  }
+});
+
+test('conversion paths: own price beats reference rates, multi-hop when needed', () => {
+  // GBPUSD trade prices GBP<->USD itself: the stop price wins over the GBPUSD rate
+  const own = conversionRate('USD', 'GBP', { symbol: 'GBPUSD', entry: 1.3645, rates: WATCHLIST_RATES }, 1.3615);
+  closeTo(own.rate, 1 / 1.3615);
+  assert.equal(own.source, 'entry');
+
+  // USDCAD prices CAD<->USD itself, then USD->GBP needs one reference hop
+  const cad = conversionRate('CAD', 'GBP', { symbol: 'USDCAD', entry: 1.3847, rates: WATCHLIST_RATES }, 1.3817);
+  closeTo(cad.rate, (1 / 1.3817) / 1.36457);
+  assert.equal(cad.source, 'mixed');
+
+  // EURJPY can't price JPY->GBP: two reference hops (JPY->USD->GBP)
+  const eur = conversionRate('JPY', 'GBP', { symbol: 'EURJPY', entry: 185.77, rates: WATCHLIST_RATES }, 185.47);
+  closeTo(eur.rate, (1 / 159.165) / 1.36457);
+  assert.equal(eur.source, 'rates');
+
+  // AUD notional for margin: own price to USD, reference hop to GBP
+  const aud = conversionRate('AUD', 'GBP', { symbol: 'AUDUSD', entry: 0.7159, rates: WATCHLIST_RATES });
+  closeTo(aud.rate, 0.7159 / 1.36457);
+});
+
+test('every pair works on a USD account, and shorts mirror longs', () => {
+  for (const symbol of Object.keys(SYMBOLS)) {
+    const mid = { XAUUSD: 4625, GBPJPY: 217.18, EURJPY: 185.77, GBPUSD: 1.3645, USDJPY: 159.16, USDCAD: 1.3847, AUDUSD: 0.7159 }[symbol];
+    const step = mid * 0.002;
+    const long = computePosition({ symbol, entry: mid, sl: mid - step, tp: mid + 2 * step, riskPct: 0.02, account: freshUSD, rates: WATCHLIST_RATES });
+    const short = computePosition({ symbol, entry: mid, sl: mid + step, tp: mid - 2 * step, riskPct: 0.02, account: freshUSD, rates: WATCHLIST_RATES });
+    assert.equal(long.ok, true, `${symbol} long`);
+    assert.equal(short.ok, true, `${symbol} short`);
+    assert.equal(long.direction, 'long');
+    assert.equal(short.direction, 'short');
+    for (const r of [long, short]) {
+      assert.ok(r.lots > 0, `${symbol} sizes above zero`);
+      assert.ok(r.actualRiskCash <= 200 + 1e-9, `${symbol} within 2% allowance`);
+      assert.ok(r.postLossEquity >= r.guard.dailyFloor - 1e-9, `${symbol} clears daily floor`);
+      assert.ok(Number.isFinite(r.marginRequired), `${symbol} margin computable`);
     }
   }
 });

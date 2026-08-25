@@ -73,25 +73,26 @@ header { display: flex; align-items: center; justify-content: space-between; pad
 
 /* ---------- symbol segmented control ---------- */
 .seg {
-  position: relative; display: grid; grid-template-columns: repeat(3, 1fr);
+  position: relative; display: flex; flex-wrap: wrap; gap: 4px;
   background: var(--surface); border: 1px solid var(--border);
-  border-radius: 17px; padding: 4px; height: var(--seg-h);
+  border-radius: 17px; padding: 4px;
   backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
 }
+.seg button { flex: 1 1 21%; height: 42px; }
 .seg-puck {
-  position: absolute; top: 4px; left: 4px; bottom: 4px;
-  width: calc((100% - 8px) / 3);
+  position: absolute; top: 4px; left: 0; width: 0; height: 42px;
   border-radius: 13px;
   background: linear-gradient(135deg, rgba(139, 92, 246, 0.32), rgba(103, 232, 249, 0.16));
   border: 1px solid rgba(167, 139, 250, 0.45);
   box-shadow: 0 2px 16px rgba(139, 92, 246, 0.30);
-  transition: transform 0.35s cubic-bezier(0.3, 1.25, 0.35, 1);
-  will-change: transform;
+  transition: transform 0.35s cubic-bezier(0.3, 1.25, 0.35, 1), width 0.35s cubic-bezier(0.3, 1.25, 0.35, 1);
+  will-change: transform, width;
+  pointer-events: none;
 }
 .seg button {
   position: relative; z-index: 1;
   background: none; border: 0; color: var(--ink-3);
-  font: inherit; font-size: 14.5px; font-weight: 650; letter-spacing: 0.3px;
+  font: inherit; font-size: 13.5px; font-weight: 650; letter-spacing: 0.2px;
   cursor: pointer; border-radius: 13px;
   transition: color 0.25s ease, transform 0.12s ease;
   -webkit-tap-highlight-color: transparent;
@@ -158,7 +159,7 @@ header { display: flex; align-items: center; justify-content: space-between; pad
 
 /* ---------- risk row ---------- */
 .risk-row { display: flex; flex-direction: column; gap: 10px; }
-.risk-chips { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.risk-chips { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .chip {
   height: 42px; border-radius: 14px; border: 1px solid var(--border);
   background: var(--surface); color: var(--ink-2);
