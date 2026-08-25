@@ -78,7 +78,7 @@ export function conversionRate(from, to, ctx, atPrice = null) {
   const bridges = absent.find(p => (A.has(p.base) && B.has(p.quote)) || (A.has(p.quote) && B.has(p.base)));
   const touches = absent.find(p => A.has(p.base) || A.has(p.quote) || B.has(p.base) || B.has(p.quote));
   const pick = bridges || touches || absent[0];
-  return { rate: null, missing: pick ? pick.key : `${from}->${to}`, missingCount: absent.length };
+  return { rate: null, missing: pick ? pick.key : `${from}->${to}`, missingCount: absent.length, missingBridges: !!bridges };
 }
 
 /**
@@ -163,7 +163,12 @@ export function computePosition(input) {
   // Losses realize at the stop price, so convert the risk leg at the stop —
   // exact for the entry-derived crosses, and correct in both directions.
   const quoteToAcct = conversionRate(spec.quote, acctCcy, ctx, sl);
-  if (quoteToAcct.rate == null) { out.error = 'missing-rate'; out.missingRate = quoteToAcct.missing; return out; }
+  if (quoteToAcct.rate == null) {
+    out.error = 'missing-rate';
+    out.missingRate = quoteToAcct.missing;
+    out.missingBridges = quoteToAcct.missingBridges;
+    return out;
+  }
   const quoteToAcctNow = conversionRate(spec.quote, acctCcy, ctx);
   const usdToAcct = conversionRate('USD', acctCcy, ctx);
 
@@ -174,9 +179,13 @@ export function computePosition(input) {
   const commUSD = commissionUSDPerLot == null
     ? RULES.commissionUSDPerLot[spec.assetClass]
     : commissionUSDPerLot;
-  const perLotCommission = usdToAcct.rate == null ? 0 : commUSD * usdToAcct.rate;
+  // If USD can't be converted (GBP account with no GBP/USD rate), charge the
+  // commission at par rather than dropping it — 1.0 over-states the true cost
+  // while GBPUSD >= 1, so sizing stays conservative instead of drifting large.
+  const commRate = usdToAcct.rate == null ? 1 : usdToAcct.rate;
+  const perLotCommission = commUSD * commRate;
   if (usdToAcct.rate == null && commUSD > 0) {
-    warnings.push({ code: 'commission-unconverted', level: 'info' });
+    warnings.push({ code: 'commission-estimated', level: 'info' });
   }
   const perLotRiskTotal = perLotRisk + perLotPad + perLotCommission;
 
@@ -217,9 +226,20 @@ export function computePosition(input) {
   const minLotRiskCash = DEFAULTS.minLot * perLotRiskTotal;
   if (lots < DEFAULTS.minLot) {
     lots = 0;
-    if (guard.allowedRiskCash <= 0 && !guard.breachedDaily && !guard.breachedTotal) {
-      // Headroom exhausted (inside the buffer zone) — not the stop's fault.
-      warnings.push({ code: 'no-headroom', level: 'serious' });
+    // If even the full un-capped request couldn't cover 0.01 lots, the stop
+    // really is too wide; otherwise the allowance is what ran out.
+    const stopGenuinelyWide = minLotRiskCash > guard.requestedRiskCash;
+    const noRoom = !stopGenuinelyWide && !guard.breachedDaily && !guard.breachedTotal
+      && (guard.allowedRiskCash <= 0 || guard.capReason != null);
+    if (noRoom) {
+      // Headroom exhausted (buffer zone, or reserved by open trades) — the
+      // stop is fine, there is simply no allowance left to spend on it.
+      warnings.push({
+        code: 'no-headroom', level: 'serious',
+        allowedRiskCash: guard.allowedRiskCash,
+        minLotRiskCash,
+        openRisk: guard.openRisk,
+      });
     } else if (!marginCapped) {
       warnings.push({
         code: 'stop-too-wide', level: 'serious',

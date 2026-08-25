@@ -11,11 +11,12 @@ Classic breach floors.
 
 ```
 riskable   = min( yourRisk% × equity,
-                  equity − dailyFloor − buffer,
-                  equity − maxLossFloor − buffer )
-perLotLoss = stopDistance × contractSize × quote→account rate
-             + spread/slippage pad + commission
+                  equity − dailyFloor    − buffer − openTradeRisk,
+                  equity − maxLossFloor  − buffer − openTradeRisk )
+perLotLoss = (stopDistance + pad) × contractSize × quote→account rate at the STOP
+             + commission
 lots       = round_DOWN( riskable / perLotLoss , 0.01 )
+             capped so margin (notional ÷ leverage) ≤ 90% of equity
 ```
 
 - `dailyFloor` = 95% of the day-start value — The5ers' daily rule is 5% of the
@@ -68,8 +69,14 @@ node --test tests/*.test.mjs    # unit tests for the sizing engine
 
 ## Deploy
 
-Pushing to `main` (or a `claude/**` branch) runs `.github/workflows/deploy.yml`:
-tests → GitHub Pages. The site is 100% static, so there is never a cold start.
+`.github/workflows/deploy.yml` runs the unit tests, then publishes the tree to
+the `gh-pages` branch with the service-worker cache version stamped from the
+commit SHA. It is served over a CDN mirror of that branch:
+
+    https://raw.githack.com/usm19/Recycler/gh-pages/index.html
+
+100% static, so there is never a cold start, and the service worker keeps a
+copy on-device for offline use.
 
 ## Rule sources (retrieved 2026-07-28)
 

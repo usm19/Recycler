@@ -17,8 +17,9 @@ export function serverOffsetHours(ts) {
   return ts >= dstStart && ts < dstEnd ? 3 : 2;
 }
 
-/** Calendar day key (YYYY-MM-DD) in The5ers server time. */
+/** Calendar day key (YYYY-MM-DD) in The5ers server time. Null when unknown. */
 export function serverDayKey(ts) {
+  if (!Number.isFinite(ts)) return null;
   return new Date(ts + serverOffsetHours(ts) * 3600e3).toISOString().slice(0, 10);
 }
 
@@ -51,8 +52,8 @@ export function resolvePnl(trade, outcome, exitPrice = null) {
  */
 export function computeJournal(trades, initial, now) {
   const resolved = trades
-    .filter(t => t.status !== 'open' && Number.isFinite(t.pnlCash))
-    .sort((a, b) => (a.closedAt || 0) - (b.closedAt || 0));
+    .filter(t => t.status !== 'open' && Number.isFinite(t.pnlCash) && Number.isFinite(t.closedAt))
+    .sort((a, b) => a.closedAt - b.closedAt);
   const open = trades.filter(t => t.status === 'open');
 
   const realizedTotal = resolved.reduce((s, t) => s + t.pnlCash, 0);

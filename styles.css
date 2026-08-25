@@ -316,17 +316,20 @@ footer a { color: var(--ink-3); }
   border-radius: 16px; padding: 2px 14px;
 }
 .set-row {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap;
   padding: 11px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 .set-row:last-child { border-bottom: 0; }
-.set-row label { font-size: 13.5px; color: var(--ink-2); flex-shrink: 0; }
+.set-row label { font-size: 13.5px; color: var(--ink-2); flex: 1 1 55%; min-width: 0; }
 .set-row label small { display: block; font-size: 10.5px; color: var(--ink-3); }
 .set-row input[type="text"] {
   background: none; border: 0; outline: none; color: var(--ink);
   font: inherit; font-size: 16px; font-weight: 650; text-align: right;
-  font-variant-numeric: tabular-nums; width: 120px; min-width: 0;
+  font-variant-numeric: tabular-nums;
+  flex: 0 1 auto; width: 120px; min-width: 96px;
 }
+.set-row .mini-seg { flex: 0 0 auto; }
 .mini-seg { display: flex; background: rgba(255, 255, 255, 0.06); border-radius: 11px; padding: 3px; }
 .mini-seg button {
   border: 0; background: none; color: var(--ink-3); font: inherit;

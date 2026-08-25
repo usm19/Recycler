@@ -123,7 +123,8 @@ test('GBPJPY works on a GBP account with NO external rates (entry is the cross)'
   assert.equal(r.ok, true);
   assert.ok(r.lots > 0);
   // commission can't be converted without GBPUSD → info warning, commission = 0
-  assert.ok(r.warnings.some(w => w.code === 'commission-unconverted'));
+  assert.ok(r.warnings.some(w => w.code === 'commission-estimated'));
+  closeTo(r.perLotCommission, 4, 1e-9);   // charged at par, the conservative side
 });
 
 test('XAUUSD short on fresh $10k, 2%', () => {
