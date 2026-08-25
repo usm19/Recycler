@@ -22,7 +22,7 @@ const defaultState = () => ({
   commissionUSDPerLot: RULES.commissionUSDPerLot.fx,
   rates: { ...Object.fromEntries(RATE_PAIRS.map(p => [p.key, null])), ts: null, source: null },
   tracking: 'journal',                       // 'journal' | 'manual'
-  journal: { currency: null, trades: [] },
+  journal: { currency: null, initial: null, trades: [] },
 });
 
 function loadState() {
@@ -93,6 +93,7 @@ function loadState() {
     const quarantined = [...(Array.isArray(j.quarantined) ? j.quarantined : []), ...rawTrades.filter(t => !usable(t))];
     s.journal = {
       currency: j.currency === 'GBP' || j.currency === 'USD' ? j.currency : (trades[0]?.currency ?? null),
+      initial: finPos(j.initial) ? j.initial : null,
       trades,
       ...(quarantined.length ? { quarantined } : {}),
     };
@@ -151,6 +152,11 @@ function fmtMoney(x, decimals = null) {
   return fmtMoneyIn(state.account.currency, x, decimals);
 }
 
+/** The account size the journal simulates — frozen when its first trade was logged. */
+function journalInitial() {
+  return state.journal.initial ?? state.account.initial;
+}
+
 /** Only the reference rates, snapshotted for the engine / a logged trade. */
 function ratesSnapshot() {
   return Object.fromEntries(RATE_PAIRS.map(p => [p.key, state.rates[p.key]]));
@@ -195,6 +201,7 @@ const PLACEHOLDERS = {
 /** Build the symbol buttons from the symbol table. */
 function buildSymbolButtons() {
   const seg = $('symbolSeg');
+  if (!seg) return;
   for (const key of SYMBOL_ORDER) {
     const b = document.createElement('button');
     b.dataset.symbol = key;
@@ -206,9 +213,9 @@ function buildSymbolButtons() {
 
 /** Park the puck over the active button — works for any wrapped layout. */
 function movePuck(animate = true) {
-  const btn = $('symbolSeg').querySelector(`button[data-symbol="${state.symbol}"]`);
+  const btn = $('symbolSeg')?.querySelector(`button[data-symbol="${state.symbol}"]`);
   const puck = $('segPuck');
-  if (!btn) return;
+  if (!btn || !puck) return;
   if (!animate) puck.style.transition = 'none';
   puck.style.width = `${btn.offsetWidth}px`;
   puck.style.height = `${btn.offsetHeight}px`;
@@ -307,7 +314,7 @@ function render() {
   const sl = parseNum(vals.sl);
   const tp = parseNum(vals.tp);
 
-  const jrnl = computeJournal(state.journal.trades, state.account.initial, Date.now());
+  const jrnl = computeJournal(state.journal.trades, journalInitial(), Date.now());
   // journal drives the account only when its currency matches the account's
   const journalActive = state.tracking === 'journal'
     && (state.journal.currency == null || state.journal.currency === state.account.currency);
@@ -408,8 +415,10 @@ function render() {
     if (tp != null && r.profitCash != null && r.tpValid) {
       $('rewardCash').textContent = fmtMoney(r.profitCash);
       // cash-based ratio so it always matches the two numbers on screen
-      const cashRR = r.actualRiskCash > 0 ? r.profitCash / r.actualRiskCash : r.rr;
-      $('rewardSub').textContent = `R:R 1 : ${cashRR.toFixed(2).replace(/\.?0+$/, '')}`;
+      const fmtRR = v => v.toFixed(2).replace(/\.?0+$/, '');
+      $('rewardSub').textContent = r.rrCash == null
+        ? `R:R 1 : ${fmtRR(r.rr)} before costs`
+        : `R:R 1 : ${fmtRR(r.rrCash)}`;
     } else {
       $('rewardCash').textContent = '—';
       $('rewardSub').textContent = tp == null ? 'add a target' : 'target on wrong side';
@@ -476,6 +485,7 @@ function takeTrade() {
     status: 'open',
   });
   state.journal.currency = state.journal.currency ?? currency;
+  state.journal.initial = state.journal.initial ?? state.account.initial;
   save({ now: true });
   const btn = $('takeBtn');
   btn.classList.add('taken');
@@ -499,7 +509,7 @@ function resolveTrade(id, outcome, exitPrice = null) {
 
 function deleteTrade(id) {
   state.journal.trades = state.journal.trades.filter(t => t.id !== id);
-  if (state.journal.trades.length === 0) state.journal.currency = null;
+  if (state.journal.trades.length === 0) { state.journal.currency = null; state.journal.initial = null; }
   confirmingDeleteId = null;
   closingId = null;
   save({ now: true }); render();
@@ -533,9 +543,10 @@ function renderJournal(jrnl, journalActive) {
   const stepFill = $('jrnlStepFill');
   stepFill.style.width = `${jrnl.stepProgress * 100}%`;
   stepFill.className = 'meter-fill ' + (jrnl.realizedTotal < 0 ? 'warn' : 'ok');
+  const jInit = journalInitial();
   $('jrnlDays').textContent =
     `profitable days ${Math.min(jrnl.profitableDays, RULES.minProfitableDays)}/${RULES.minProfitableDays}` +
-    ` (≥ ${fmtJ(RULES.profitableDayPct * state.account.initial)}) · target ${fmtJ(RULES.targets.step1 * state.account.initial)}`;
+    ` (≥ ${fmtJ(RULES.profitableDayPct * jInit)}) · target ${fmtJ(RULES.targets.step1 * jInit)}`;
 
   const jb = $('jrnlBanner');
   if (jrnl.breaches.length) {
@@ -677,7 +688,9 @@ function tryFetchRates() {
 }
 
 function buildRateRows() {
-  $('rateCard').innerHTML = RATE_PAIRS.map(p => `
+  const card = $('rateCard');
+  if (!card) return;
+  card.innerHTML = RATE_PAIRS.map(p => `
     <div class="set-row">
       <label>${p.label}</label>
       <input type="text" inputmode="decimal" id="set-rate-${p.key}" aria-label="${p.key} rate">
@@ -706,7 +719,7 @@ function syncRateFields() {
 
 function syncTrackUI() {
   syncMiniSegByData('trackSeg', 'track', state.tracking);
-  const jrnl = computeJournal(state.journal.trades, state.account.initial, Date.now());
+  const jrnl = computeJournal(state.journal.trades, journalInitial(), Date.now());
   const active = state.tracking === 'journal'
     && (state.journal.currency == null || state.journal.currency === state.account.currency);
   const vals = [
@@ -794,6 +807,7 @@ function bindSettings() {
     e.target.textContent = 'Reset account & clear journal';
     state.journal.trades = [];
     state.journal.currency = null;
+    state.journal.initial = null;
     state.account.equity = state.account.initial;
     state.account.dayStart = state.account.initial;
     save(); syncTrackUI(); render();

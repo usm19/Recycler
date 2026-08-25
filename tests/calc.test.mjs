@@ -356,3 +356,45 @@ test('every pair works on a USD account, and shorts mirror longs', () => {
     }
   }
 });
+
+test('EURJPY sizes from GBPUSD + EURUSD alone, with no USDJPY rate', () => {
+  // regression: all five reference rates must reach the engine, and the graph
+  // must route JPY->EUR (trade) ->USD (EURUSD) ->GBP (GBPUSD) when USDJPY is absent
+  const r = computePosition({
+    symbol: 'EURJPY', entry: 185.770, sl: 185.470, tp: 186.370,
+    riskPct: 0.015, account: freshGBP, rates: { GBPUSD: 1.36457, EURUSD: 1.16716 },
+  });
+  assert.equal(r.ok, true);
+  const jpyToGbp = (1 / 185.470) * 1.16716 / 1.36457;   // EURJPY stop -> EUR -> USD -> GBP
+  closeTo(r.perLotRisk, 0.30 * 100000 * jpyToGbp, 1e-9);
+  assert.ok(r.lots > 0);
+  assert.ok(r.actualRiskCash <= 150 + 1e-9);
+});
+
+test('USDCAD and AUDUSD need only GBPUSD on a GBP account', () => {
+  for (const [symbol, entry, sl] of [['USDCAD', 1.38470, 1.38170], ['AUDUSD', 0.71590, 0.71290]]) {
+    const r = computePosition({ symbol, entry, sl, riskPct: 0.015, account: freshGBP, rates: { GBPUSD: 1.36457 } });
+    assert.equal(r.ok, true, `${symbol} should size from its own price + GBPUSD`);
+    assert.ok(r.lots > 0);
+    assert.ok(Number.isFinite(r.marginRequired));
+  }
+});
+
+test('rr is the price ratio; rrCash is what the money does', () => {
+  const r = computePosition({
+    symbol: 'GBPJPY', entry: 217.180, sl: 216.780, tp: 217.980,
+    riskPct: 0.02, account: freshGBP, rates: WATCHLIST_RATES,
+  });
+  closeTo(r.rr, 2);                                    // price distance, before costs
+  closeTo(r.rrCash, r.profitCash / r.actualRiskCash);  // after pad, commission and FX legs
+  assert.ok(r.rrCash < r.rr, 'costs must drag the cash ratio below the price ratio');
+
+  // no position → no cash ratio to report
+  const zero = computePosition({
+    symbol: 'XAUUSD', entry: 4625, sl: 4425, tp: 5025,
+    riskPct: 0.01, account: freshGBP, rates: WATCHLIST_RATES,
+  });
+  assert.equal(zero.lots, 0);
+  assert.equal(zero.rrCash, null);
+  closeTo(zero.rr, 2);
+});

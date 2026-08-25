@@ -255,7 +255,7 @@ export function computePosition(input) {
   const postLossEquity = equity - actualRiskCash;
 
   // Take profit / reward
-  let profitCash = null, rr = null, tpValid = null;
+  let profitCash = null, rr = null, rrCash = null, tpValid = null;
   if (tp != null && Number.isFinite(tp) && tp > 0) {
     tpValid = direction === 'long' ? tp > entry : tp < entry;
     if (!tpValid) warnings.push({ code: 'tp-wrong-side', level: 'warning' });
@@ -264,7 +264,7 @@ export function computePosition(input) {
     const quoteToAcctTp = conversionRate(spec.quote, acctCcy, ctx, tp);
     const tpRate = quoteToAcctTp.rate ?? quoteToAcct.rate;
     profitCash = tpDistance * spec.contractSize * tpRate * lots - perLotCommission * lots;
-    rr = tpDistance / stopDistance;
+    rr = tpDistance / stopDistance;   // price distance only, before costs/FX legs
   }
 
   // Margin totals for the sized position
@@ -279,6 +279,9 @@ export function computePosition(input) {
 
   const pipValuePerLot = spec.pipSize * spec.contractSize * quoteToAcctNow.rate;
 
+  // Cash reward-per-unit-risk: what the two money figures on screen actually do.
+  rrCash = actualRiskCash > 0 && profitCash != null ? profitCash / actualRiskCash : null;
+
   Object.assign(out, {
     ok: true,
     direction, stopDistance, stopPips,
@@ -289,7 +292,7 @@ export function computePosition(input) {
     allowedRiskCash: guard.allowedRiskCash,
     capReason: guard.capReason,
     actualRiskCash, actualRiskStopOnly, actualRiskPct, postLossEquity,
-    profitCash, rr, tpValid,
+    profitCash, rr, rrCash, tpValid,
     marginRequired, marginPctOfEquity, marginPerLot, marginCapped, leverage,
     guard,
     conversion: { quoteToAcct, usdToAcct },
